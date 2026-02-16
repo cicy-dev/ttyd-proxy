@@ -112,7 +112,7 @@ const server = http.createServer(async (req, res) => {
     const body = await readBody(req);
     try {
       const { text, target } = JSON.parse(body);
-      if (!text || !target) return json(res, { success: false, error: 'need text and target' });
+      if (!text || !text.trim() || !target) return json(res, { success: false, error: 'need text and target' });
       execSync('tmux send-keys -t ' + JSON.stringify(target) + ' ' + JSON.stringify(text) + ' Enter', { timeout: 5000 });
       return json(res, { success: true });
     } catch (e) { return json(res, { success: false, error: e.message }); }
