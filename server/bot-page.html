@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>{{BOT_NAME}}</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #eee; font-family: -apple-system, sans-serif; height: 100vh; display: flex; flex-direction: column; }
+.header { padding: 8px 12px; background: #16213e; display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.header .name { color: #0f0; font-weight: bold; }
+.header .status { color: #888; font-size: 12px; }
+.terminal { flex: 1; position: relative; }
+.terminal iframe { width: 100%; height: 100%; border: none; }
+.input-bar { display: flex; gap: 6px; padding: 8px; background: #0f3460; }
+.input-bar input { flex: 1; padding: 10px 12px; border: 1px solid #333; border-radius: 6px; background: #1a1a2e; color: #eee; font-size: 15px; outline: none; }
+.input-bar input:focus { border-color: #0f0; }
+.btn { padding: 10px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
+.btn-send { background: #0f0; color: #000; font-weight: bold; }
+.btn-send:active { background: #0c0; }
+.btn-mic { background: #e94560; color: #fff; min-width: 44px; }
+.btn-mic.recording { background: #ff0; color: #000; animation: pulse 1s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+</style>
+</head>
+<body>
+<div class="header">
+  <span class="name">{{BOT_NAME}}</span>
+  <span class="status" id="status">ready</span>
+</div>
+<div class="terminal">
+  <iframe id="ttyd" src="{{TTYD_PATH}}"></iframe>
+</div>
+<div class="input-bar">
+  <input id="msg" type="text" placeholder="输入消息..." autocomplete="off">
+  <button class="btn btn-send" id="sendBtn">发送</button>
+  <button class="btn btn-mic" id="micBtn">🎤</button>
+</div>
+<script>
+const WIN_ID = '{{WIN_ID}}';
+const BOT_NAME = '{{BOT_NAME}}';
+const msgInput = document.getElementById('msg');
+const sendBtn = document.getElementById('sendBtn');
+const micBtn = document.getElementById('micBtn');
+const statusEl = document.getElementById('status');
+
+// 发送消息到 tmux
+async function sendMsg(text) {
+  if (!text.trim()) return;
+  statusEl.textContent = 'sending...';
+  try {
+    const r = await fetch('/api/tmux', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text.trim(), target: WIN_ID })
+    });
+    const d = await r.json();
+    statusEl.textContent = d.success ? 'sent ✅' : 'error: ' + d.error;
+    if (d.success) msgInput.value = '';
+  } catch (e) {
+    statusEl.textContent = 'error: ' + e.message;
+  }
+  setTimeout(() => statusEl.textContent = 'ready', 2000);
+}
+
+sendBtn.onclick = () => sendMsg(msgInput.value);
+msgInput.onkeydown = (e) => { if (e.key === 'Enter') sendMsg(msgInput.value); };
+
+// 录音（语音识别）
+let recognition = null;
+let isRecording = false;
+
+if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SR();
+  recognition.continuous = false;
+  recognition.interimResults = true;
+  recognition.lang = 'zh-CN';
+
+  recognition.onresult = (e) => {
+    let text = '';
+    for (let i = 0; i < e.results.length; i++) {
+      text += e.results[i][0].transcript;
+    }
+    msgInput.value = text;
+    if (e.results[0].isFinal) {
+      stopRecording();
+      sendMsg(text);
+    }
+  };
+  recognition.onerror = () => stopRecording();
+  recognition.onend = () => stopRecording();
+}
+
+function startRecording() {
+  if (!recognition) { alert('浏览器不支持语音识别'); return; }
+  isRecording = true;
+  micBtn.classList.add('recording');
+  micBtn.textContent = '⏹';
+  statusEl.textContent = '🎤 listening...';
+  recognition.start();
+}
+
+function stopRecording() {
+  isRecording = false;
+  micBtn.classList.remove('recording');
+  micBtn.textContent = '🎤';
+  statusEl.textContent = 'ready';
+  try { recognition.stop(); } catch {}
+}
+
+micBtn.onclick = () => isRecording ? stopRecording() : startRecording();
+
+// 自动聚焦输入框
+msgInput.focus();
+</script>
+</body>
+</html>
