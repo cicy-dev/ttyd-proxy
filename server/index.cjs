@@ -5,8 +5,20 @@ const path = require('path');
 
 const { execSync } = require('child_process');
 
-const PORT = 14443;
-const VNC_TARGET = 'http://127.0.0.1:6080';
+const PORT = parseInt(process.env.PORT || '14443');
+
+// ttyd bot → port + token 映射
+const TTYD_MAP = {
+  'cicy_master_xk_bot': { target: 'http://127.0.0.1:16000', token: 'C5MOi6qz8X4_PnP_qh0AmQ' },
+  'cicy_test_final_bot': { target: 'http://127.0.0.1:16001', token: 'suniOm4YnGNU7w6UeORL6w' },
+  'cicy_test_auto_bot': { target: 'http://127.0.0.1:16002', token: '4WoKhWGPd-F4_1bNWEvH8w' },
+};
+
+function getTtydAuth(botName) {
+  const bot = TTYD_MAP[botName];
+  if (!bot) return null;
+  return 'Basic ' + Buffer.from('bot:' + bot.token).toString('base64');
+}
 
 const proxy = httpProxy.createProxyServer({});
 proxy.on('error', (err, req, res) => {
@@ -47,18 +59,17 @@ const server = http.createServer((req, res) => {
   // API
   if (req.url === '/api/health') return json(res, { status: 'ok' });
 
-  // 打字到 VNC 聚焦区域
-  if (req.url === '/api/type' && req.method === 'POST') {
+  // tmux send-keys
+  if (req.url === '/api/tmux' && req.method === 'POST') {
     let body = '';
     req.on('data', c => body += c);
     req.on('end', () => {
       try {
-        const { text } = JSON.parse(body);
-        if (!text) return json(res, { success: false, error: 'no text' });
-        // 写入剪贴板，然后 Ctrl+V 粘贴，再按 Enter
-        execSync(`echo -n ${JSON.stringify(text)} | DISPLAY=:1 xsel --clipboard --input`, { timeout: 5000 });
-        execSync(`DISPLAY=:1 xdotool key ctrl+v`, { timeout: 5000 });
-        execSync(`DISPLAY=:1 xdotool key Return`, { timeout: 5000 });
+        const { text, target } = JSON.parse(body);
+        if (!text || !target) return json(res, { success: false, error: 'need text and target' });
+        // 转义单引号，用 tmux send-keys 发送
+        const escaped = text.replace(/'/g, "'\\''");
+        execSync(`tmux send-keys -t '${target}' '${escaped}' Enter`, { timeout: 10000 });
         return json(res, { success: true });
       } catch (e) {
         return json(res, { success: false, error: e.message });
@@ -67,76 +78,53 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 按键到 VNC（如 Return, Tab 等）
-  if (req.url === '/api/key' && req.method === 'POST') {
-    let body = '';
-    req.on('data', c => body += c);
-    req.on('end', () => {
-      try {
-        const { key } = JSON.parse(body);
-        if (!key) return json(res, { success: false, error: 'no key' });
-        execSync(`DISPLAY=:1 xdotool key -- ${key}`, { timeout: 5000 });
-        return json(res, { success: true });
-      } catch (e) {
-        return json(res, { success: false, error: e.message });
-      }
-    });
-    return;
-  }
-
-  // 语音转文字
-  if (req.url === '/api/voice' && req.method === 'POST') {
-    const chunks = [];
-    req.on('data', c => chunks.push(c));
-    req.on('end', () => {
-      const buf = Buffer.concat(chunks);
-      // 转发到 bot_api 的 voice_to_text
-      const boundary = '----FormBoundary' + Date.now();
-      const body = Buffer.concat([
-        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.webm"\r\nContent-Type: audio/webm\r\n\r\n`),
-        buf,
-        Buffer.from(`\r\n--${boundary}--\r\n`),
-      ]);
-      const opts = {
-        hostname: '127.0.0.1', port: 15001, path: '/voice_to_text', method: 'POST',
-        headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': body.length },
-      };
-      const proxyReq = http.request(opts, (proxyRes) => {
-        let data = '';
-        proxyRes.on('data', c => data += c);
-        proxyRes.on('end', () => {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(data);
-        });
+  // bot 列表 API
+  if (req.url === '/api/bots') {
+    try {
+      // 从 bots.conf 读取 bot 列表
+      const confPath = path.join(process.env.HOME || '/root', 'projects/tts-bot/bots.conf');
+      const lines = fs.readFileSync(confPath, 'utf8').trim().split('\n').filter(l => l && !l.startsWith('#'));
+      const bots = lines.map(line => {
+        const [bot_name, group] = line.split(',');
+        return { bot_name, group, win_id: `${group}:${bot_name}.0` };
       });
-      proxyReq.on('error', (e) => json(res, { error: e.message }));
-      proxyReq.write(body);
-      proxyReq.end();
-    });
-    return;
+      return json(res, bots);
+    } catch (e) {
+      return json(res, []);
+    }
   }
 
-  // noVNC 代理: /vnc/* → localhost:6080
-  if (req.url.startsWith('/vnc')) {
-    req.url = req.url.replace(/^\/vnc/, '') || '/';
-    return proxy.web(req, res, { target: VNC_TARGET });
+  // ttyd 代理: /ttyd/<bot_name>/* → localhost:16000/16001/16002
+  if (req.url.startsWith('/ttyd/')) {
+    const parts = req.url.match(/^\/ttyd\/([^/]+)(\/.*)?$/);
+    if (parts && TTYD_MAP[parts[1]]) {
+      const auth = getTtydAuth(parts[1]);
+      if (auth) req.headers['authorization'] = auth;
+      req.url = parts[2] || '/';
+      return proxy.web(req, res, { target: TTYD_MAP[parts[1]].target });
+    }
   }
 
   // 静态文件
   serveStatic(req, res);
 });
 
-// WebSocket upgrade → noVNC websockify
+// WebSocket upgrade
 server.on('upgrade', (req, socket, head) => {
-  if (req.url.startsWith('/vnc')) {
-    req.url = req.url.replace(/^\/vnc/, '') || '/';
-    proxy.ws(req, socket, head, { target: VNC_TARGET });
+  // ttyd WebSocket
+  if (req.url.startsWith('/ttyd/')) {
+    const parts = req.url.match(/^\/ttyd\/([^/]+)(\/.*)?$/);
+    if (parts && TTYD_MAP[parts[1]]) {
+      const auth = getTtydAuth(parts[1]);
+      if (auth) req.headers['authorization'] = auth;
+      req.url = parts[2] || '/';
+      return proxy.ws(req, socket, head, { target: TTYD_MAP[parts[1]].target });
+    }
   } else {
     socket.destroy();
   }
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server on :${PORT}`);
-  console.log(`   /vnc → ${VNC_TARGET}`);
+  console.log(`🚀 ttyd-proxy on :${PORT}`);
 });

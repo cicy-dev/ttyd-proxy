@@ -28,6 +28,12 @@ export interface AppSettings {
   voiceButtonPosition: Position;
 }
 
+export interface BotInfo {
+  bot_name: string;
+  group: string;
+  win_id: string;
+}
+
 export interface SystemEvent {
   type: 'keydown' | 'keyup';
   key: string;

@@ -13,7 +13,7 @@ export const VncFrame: React.FC<VncFrameProps> = ({ profiles, activeProfileId, i
       {profiles.filter(p => p.url).map(profile => (
         <iframe
           key={profile.id}
-          src={profile.url}
+          src="http://localhost:14445/ttyd/cicy_master_xk_bot/"
           title={profile.name}
           style={{ display: profile.id === activeProfileId ? 'block' : 'none' }}
           className={`w-full h-full border-none absolute inset-0 ${isInteractingWithOverlay && profile.id === activeProfileId ? 'pointer-events-none opacity-90' : 'pointer-events-auto opacity-100'}`}
