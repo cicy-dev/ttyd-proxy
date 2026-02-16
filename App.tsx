@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Send, Settings, Wifi, WifiOff, X, Plus, Trash2, Edit2, Keyboard, Check, Mic, MicOff, Terminal, MessageSquare, Maximize, Loader2, CheckCircle, History, Menu, Sparkles } from 'lucide-react';
+import { Send, Settings, Wifi, WifiOff, X, Plus, Trash2, Edit2, Keyboard, Check, Mic, MicOff, Terminal, MessageSquare, Maximize, Loader2, CheckCircle, History, Menu, Sparkles, Layout } from 'lucide-react';
 import { TtydFrame } from './components/TtydFrame';
 import { FloatingPanel } from './components/FloatingPanel';
 import { VoiceFloatingButton } from './components/VoiceFloatingButton';
 import { LoginForm } from './components/LoginForm';
+import { TmuxSplitControls } from './components/TmuxSplitControls';
+import { MultiTerminalView } from './components/MultiTerminalView';
 import { sendCommandToTmux, sendSystemEvent, sendShortcut } from './services/mockApi';
 import { AppSettings, Position, Size } from './types';
 
@@ -47,6 +49,9 @@ const App: React.FC = () => {
   const [correctedText, setCorrectedText] = useState('');
   const [isCorrectingEnglish, setIsCorrectingEnglish] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  
+  // Multi-Terminal Mode
+  const [multiTerminalMode, setMultiTerminalMode] = useState(false);
   
   // Network Status
   const [networkLatency, setNetworkLatency] = useState<number | null>(null);
@@ -396,6 +401,20 @@ const App: React.FC = () => {
     }
   };
 
+  const handleTmuxSplitCommand = async (command: string) => {
+    setIsSending(true);
+    try {
+      // Execute the tmux command directly
+      await sendCommandToTmux(command, TMUX_TARGET);
+      setSendSuccess(true);
+      setTimeout(() => setSendSuccess(false), 2000);
+    } catch (error) {
+      console.error("Failed to execute tmux command", error);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
   const handlePanelChange = (pos: Position, size: Size) => {
     setSettings(prev => ({
       ...prev,
@@ -437,6 +456,22 @@ const App: React.FC = () => {
 
   if (!isLoaded) return <div className="bg-black w-screen h-screen"></div>;
 
+  // Multi-Terminal Mode
+  if (multiTerminalMode) {
+    return (
+      <div className="relative w-screen h-screen bg-black overflow-hidden font-sans">
+        <MultiTerminalView
+          initialBotName={BOT_NAME}
+          token={token}
+          isInteracting={isInteracting}
+          onInteractionStart={() => setIsInteracting(true)}
+          onInteractionEnd={() => setIsInteracting(false)}
+          onClose={() => setMultiTerminalMode(false)}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="relative w-screen h-screen bg-black overflow-hidden font-sans">
       {/* Full Screen Iframe */}
@@ -447,6 +482,14 @@ const App: React.FC = () => {
       {/* Minimized Toggle Button */}
       {!settings.showPrompt && (
         <div className="absolute top-4 right-4 z-40 flex gap-2">
+           <button
+                onClick={() => setMultiTerminalMode(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-full shadow-lg transition-all"
+            >
+                <Layout size={18} />
+                <span className="font-medium hidden md:inline">Multi-Terminal</span>
+           </button>
+
            <button
                 onClick={toggleVoiceMode}
                 className={`flex items-center gap-2 px-4 py-2 rounded-full shadow-lg transition-all ${
@@ -501,6 +544,21 @@ const App: React.FC = () => {
                             {networkLatency !== null ? `${networkLatency}ms` : 'offline'}
                         </span>
                     </div>
+
+                    {/* Tmux Split Controls */}
+                    <TmuxSplitControls
+                        tmuxTarget={TMUX_TARGET}
+                        onSplitCommand={handleTmuxSplitCommand}
+                    />
+
+                    {/* Multi-Terminal Mode Button */}
+                    <button
+                        onClick={() => setMultiTerminalMode(true)}
+                        className="p-2 rounded-lg text-gray-400 hover:bg-purple-600 hover:text-white transition-all"
+                        title="Multi-Terminal Mode (iframe split)"
+                    >
+                        <Layout size={18} />
+                    </button>
 
                     {/* History Button */}
                     <button
