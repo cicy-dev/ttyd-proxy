@@ -8,12 +8,19 @@ interface VncFrameProps {
 }
 
 export const VncFrame: React.FC<VncFrameProps> = ({ profiles, activeProfileId, isInteractingWithOverlay }) => {
+  const token = localStorage.getItem('token') || '';
+  const appendToken = (url: string) => {
+    if (!token) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return url + sep + 'token=' + encodeURIComponent(token);
+  };
+
   return (
     <div className="absolute inset-0 z-0 bg-black overflow-hidden">
       {profiles.filter(p => p.url).map(profile => (
         <iframe
           key={profile.id}
-          src={profile.url}
+          src={appendToken(profile.url)}
           title={profile.name}
           style={{ display: profile.id === activeProfileId ? 'block' : 'none' }}
           className={`w-full h-full border-none absolute inset-0 ${isInteractingWithOverlay && profile.id === activeProfileId ? 'pointer-events-none opacity-90' : 'pointer-events-auto opacity-100'}`}

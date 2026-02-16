@@ -6,35 +6,27 @@ import { VoiceFloatingButton } from './components/VoiceFloatingButton';
 import { sendCommandToVnc, sendSystemEvent, sendShortcut } from './services/mockApi';
 import { AppSettings, VncProfile, Position, Size } from './types';
 
+// 从 URL query 获取 bot_name，默认 cicy_master_xk_bot
+const BOT_NAME = new URLSearchParams(window.location.search).get('bot_name') || 'cicy_master_xk_bot';
+
 // Default configuration
 const DEFAULT_PROFILE: VncProfile = {
   id: 'default',
-  name: 'VNC :1',
-  url: '/vnc/vnc.html?autoconnect=true&resize=scale&path=vnc/websockify',
-  display: ':1'
+  name: BOT_NAME,
+  url: `/ttyd/${BOT_NAME}/`,
+  type: 'ttyd',
+  tmuxTarget: `master:${BOT_NAME}.0`
 };
-
-const VNC2_PROFILE: VncProfile = {
-  id: 'vnc2',
-  name: 'VNC :2',
-  url: 'https://g-6082.cicy.de5.net/vnc.html?autoconnect=true&resize=scale',
-  display: ':2'
-};
-
-// TODO: remove all ttyd logic from vnc-proxy (ttyd has its own project: ttyd-proxy)
-// ttyd profiles 从 /api/bots 动态加载
-const DEFAULT_TTYD_PROFILES: VncProfile[] = [];
 
 const DEFAULT_SETTINGS: AppSettings = {
   panelPosition: { x: 20, y: 20 },
   panelSize: { width: 450, height: 188 },
-  profiles: [DEFAULT_PROFILE, VNC2_PROFILE],
+  profiles: [DEFAULT_PROFILE],
   activeProfileId: 'default',
   forwardEvents: false,
   lastDraft: '',
   showPrompt: true,
   showVoiceControl: false,
-  // Center Left Up roughly
   voiceButtonPosition: { x: 40, y: 200 }
 };
 
@@ -81,7 +73,7 @@ const App: React.FC = () => {
         try {
           const parsed = JSON.parse(saved);
           // 强制使用最新的默认 profiles
-          parsed.profiles = [DEFAULT_PROFILE, VNC2_PROFILE];
+          parsed.profiles = [DEFAULT_PROFILE];
           if (!parsed.activeProfileId || !parsed.profiles.find((p: any) => p.id === parsed.activeProfileId)) {
             parsed.activeProfileId = 'default';
           }
@@ -157,7 +149,7 @@ const App: React.FC = () => {
         if (blob.size < 1000) return; // 太短忽略
         setIsListening(false);
         try {
-          const res = await fetch('/api/voice', { method: 'POST', body: blob });
+          const res = await fetch('/api/voice', { method: 'POST', body: blob, headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('token') || '') } });
           const data = await res.json();
           if (data.text) handleVoiceResult(data.text);
         } catch (e) {
