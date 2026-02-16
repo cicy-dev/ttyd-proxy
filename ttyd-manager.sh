@@ -1,7 +1,7 @@
 #!/bin/bash
 # ttyd-manager.sh — 宿主机 ttyd 进程管理器
 # 读取 MySQL bot_config，为每个 bot 启动/维护 ttyd 进程
-# 用法: bash ttyd-manager.sh [start|stop|status]
+# 用法: bash ttyd-manager.sh [start|stop|status|restart]
 
 ACTION="${1:-start}"
 LOAD_BOTS="/tmp/load_bots.py"
@@ -13,8 +13,16 @@ ensure_loader() {
 import pymysql, json
 conn = pymysql.connect(host="localhost", user="root", password="pb200898", database="tts_bot", charset="utf8mb4")
 c = conn.cursor()
-c.execute("SELECT bot_name, tmux_session, tmux_window, group_name, ttyd_port, ttyd_token FROM bot_config WHERE status='active'")
-print(json.dumps([{"bot_name":r[0],"tmux_session":r[1],"tmux_window":r[2],"group":r[3],"ttyd_port":r[4],"ttyd_token":r[5]} for r in c.fetchall()]))
+c.execute("SELECT bot_name, tmux_session, tmux_window, group_name, ttyd_port, ttyd_token, ttyd_writable FROM bot_config WHERE status='active'")
+print(json.dumps([{
+    "bot_name": r[0],
+    "tmux_session": r[1],
+    "tmux_window": r[2],
+    "group": r[3],
+    "ttyd_port": r[4],
+    "ttyd_token": r[5],
+    "ttyd_writable": bool(r[6])
+} for r in c.fetchall()]))
 conn.close()
 PYEOF
 }
@@ -31,9 +39,17 @@ is_running() {
   pgrep -f "ttyd.*-p ${port}" > /dev/null 2>&1
 }
 
+# 停止某端口的 ttyd
+stop_one() {
+  local port="$1"
+  pkill -f "ttyd.*-p ${port}"
+  fuser -k "${port}/tcp" > /dev/null 2>&1
+  sleep 0.3
+}
+
 # 启动单个 bot 的 ttyd
 start_one() {
-  local bot_name="$1" port="$2" token="$3" session="$4" window="$5"
+  local bot_name="$1" port="$2" token="$3" session="$4" window="$5" writable="$6"
   local win_id="${session}:${window}.0"
 
   if is_running "$port"; then
@@ -44,84 +60,135 @@ start_one() {
   fuser -k "${port}/tcp" > /dev/null 2>&1
   sleep 0.3
 
+  # 根据writable决定是否添加 -W 参数
+  local write_flag=""
+  if [ "$writable" = "true" ]; then
+    write_flag="-W"
+    echo "$LOG_TAG Starting ttyd on port $port (WRITABLE) for $bot_name"
+  else
+    echo "$LOG_TAG Starting ttyd on port $port (READONLY) for $bot_name"
+  fi
+
   # 启动 ttyd
-  nohup ttyd -p "$port" -c "bot:${token}" -R \
+  nohup ttyd -p "$port" -c "bot:${token}" $write_flag -R \
     tmux attach-session -t "$win_id" \
     > /dev/null 2>&1 &
 
-  echo "$LOG_TAG 启动 ttyd: $bot_name port=$port win=$win_id pid=$!"
-}
-
-# 停止所有 ttyd
-stop_all() {
-  pkill -f "ttyd.*-p 160" 2>/dev/null
-  echo "$LOG_TAG 已停止所有 ttyd 进程"
-}
-
-# 显示状态
-show_status() {
-  local bots
-  bots=$(load_bots)
-  if [ -z "$bots" ]; then
-    echo "$LOG_TAG 无法加载 bot 列表"
-    return 1
+  sleep 0.5
+  if is_running "$port"; then
+    echo "$LOG_TAG ✓ ttyd started on port $port"
+  else
+    echo "$LOG_TAG ✗ Failed to start ttyd on port $port"
   fi
+}
 
-  echo "$LOG_TAG === ttyd 状态 ==="
-  echo "$bots" | python3 -c "
-import sys, json
-bots = json.load(sys.stdin)
-for b in bots:
-    import subprocess
-    port = b['ttyd_port']
-    r = subprocess.run(['pgrep', '-f', f'ttyd.*-p {port}'], capture_output=True)
-    status = '✅ 运行中' if r.returncode == 0 else '❌ 未运行'
-    pid = r.stdout.decode().strip().split('\n')[0] if r.returncode == 0 else '-'
-    print(f\"  {b['bot_name']}: port={port} {status} pid={pid}\")
-"
+# 重启单个 bot 的 ttyd
+restart_one() {
+  local bot_name="$1" port="$2" token="$3" session="$4" window="$5" writable="$6"
+  echo "$LOG_TAG Restarting ttyd for $bot_name on port $port"
+  stop_one "$port"
+  start_one "$bot_name" "$port" "$token" "$session" "$window" "$writable"
 }
 
 # 启动所有
 start_all() {
-  local bots
-  bots=$(load_bots)
-  if [ -z "$bots" ]; then
-    echo "$LOG_TAG 无法加载 bot 列表"
-    return 1
+  local bots_json
+  bots_json=$(load_bots)
+  if [ -z "$bots_json" ] || [ "$bots_json" = "[]" ]; then
+    echo "$LOG_TAG No active bots found"
+    return
   fi
 
-  echo "$bots" | python3 -c "
-import sys, json, subprocess, time
-bots = json.load(sys.stdin)
-for b in bots:
-    port = str(b['ttyd_port'])
-    token = b['ttyd_token'] or ''
-    session = b['tmux_session']
-    window = b['tmux_window']
-    bot_name = b['bot_name']
-    win_id = f'{session}:{window}.0'
-
-    # 检查是否已运行
-    r = subprocess.run(['pgrep', '-f', f'ttyd.*-p {port}'], capture_output=True)
-    if r.returncode == 0:
-        continue
-
-    # 清理残留端口
-    subprocess.run(['fuser', '-k', f'{port}/tcp'], capture_output=True)
-    time.sleep(0.3)
-
-    # 启动
-    proc = subprocess.Popen(
-        ['ttyd', '-p', port, '-c', f'bot:{token}', '-R', 'tmux', 'attach-session', '-t', win_id],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
-    print(f'[ttyd-manager] 启动: {bot_name} port={port} win={win_id} pid={proc.pid}')
-"
+  echo "$bots_json" | jq -c '.[]' | while read -r bot; do
+    local name=$(echo "$bot" | jq -r '.bot_name')
+    local port=$(echo "$bot" | jq -r '.ttyd_port')
+    local token=$(echo "$bot" | jq -r '.ttyd_token')
+    local session=$(echo "$bot" | jq -r '.tmux_session')
+    local window=$(echo "$bot" | jq -r '.tmux_window')
+    local writable=$(echo "$bot" | jq -r '.ttyd_writable')
+    
+    if [ -z "$port" ] || [ "$port" = "null" ]; then
+      continue
+    fi
+    
+    start_one "$name" "$port" "$token" "$session" "$window" "$writable"
+  done
 }
 
+# 停止所有
+stop_all() {
+  local bots_json
+  bots_json=$(load_bots)
+  if [ -z "$bots_json" ] || [ "$bots_json" = "[]" ]; then
+    echo "$LOG_TAG No active bots found"
+    return
+  fi
+
+  echo "$bots_json" | jq -c '.[]' | while read -r bot; do
+    local port=$(echo "$bot" | jq -r '.ttyd_port')
+    if [ -n "$port" ] && [ "$port" != "null" ]; then
+      echo "$LOG_TAG Stopping ttyd on port $port"
+      stop_one "$port"
+    fi
+  done
+}
+
+# 重启所有
+restart_all() {
+  echo "$LOG_TAG Restarting all ttyd processes"
+  stop_all
+  sleep 1
+  start_all
+}
+
+# 显示状态
+show_status() {
+  local bots_json
+  bots_json=$(load_bots)
+  if [ -z "$bots_json" ] || [ "$bots_json" = "[]" ]; then
+    echo "$LOG_TAG No active bots found"
+    return
+  fi
+
+  echo "$LOG_TAG TTYD Status:"
+  echo "$bots_json" | jq -c '.[]' | while read -r bot; do
+    local name=$(echo "$bot" | jq -r '.bot_name')
+    local port=$(echo "$bot" | jq -r '.ttyd_port')
+    local writable=$(echo "$bot" | jq -r '.ttyd_writable')
+    
+    if [ -z "$port" ] || [ "$port" = "null" ]; then
+      continue
+    fi
+    
+    local mode="READONLY"
+    if [ "$writable" = "true" ]; then
+      mode="WRITABLE"
+    fi
+    
+    if is_running "$port"; then
+      echo "  ✓ $name (port $port) - RUNNING ($mode)"
+    else
+      echo "  ✗ $name (port $port) - STOPPED ($mode)"
+    fi
+  done
+}
+
+# 主逻辑
 case "$ACTION" in
-  start)  start_all ;;
-  stop)   stop_all ;;
-  status) show_status ;;
-  *)      echo "用法: $0 [start|stop|status]" ;;
+  start)
+    start_all
+    ;;
+  stop)
+    stop_all
+    ;;
+  restart)
+    restart_all
+    ;;
+  status)
+    show_status
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+    ;;
 esac

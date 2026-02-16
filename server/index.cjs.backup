@@ -3,41 +3,9 @@ const httpProxy = require('http-proxy');
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
-const os = require('os');
-const crypto = require('crypto');
 
 const PORT = 14443;
-
-// Load or generate token from ~/personal/global.json
-function loadOrGenerateToken() {
-  const configPath = path.join(os.homedir(), 'personal', 'global.json');
-  const configDir = path.dirname(configPath);
-
-  try {
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true });
-    }
-
-    if (fs.existsSync(configPath)) {
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      if (config.api_token) {
-        console.log(`✓ Loaded token from ${configPath}`);
-        return config.api_token;
-      }
-    }
-
-    const newToken = crypto.randomBytes(32).toString('hex');
-    const config = { api_token: newToken };
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
-    console.log(`✓ Generated new token and saved to ${configPath}`);
-    return newToken;
-  } catch (e) {
-    console.error('Error loading/generating token:', e.message);
-    return '123456';
-  }
-}
-
-const TOKEN = loadOrGenerateToken();
+const TOKEN = '123456';
 
 function checkToken(req) {
   const url = new URL(req.url, 'http://localhost');
@@ -130,34 +98,6 @@ const server = http.createServer(async (req, res) => {
     return serveStatic(req, res);
   }
 
-  // ttyd proxy - no auth check here, ttyd has its own auth
-  if (urlPath.startsWith('/ttyd/')) {
-    const m = req.url.match(/^\/ttyd\/([^\/]+)(\/.*)?$/);
-    if (m) {
-      const nameOrPort = m[1];
-      let port;
-      let bot;
-      if (/^\d+$/.test(nameOrPort)) { 
-        port = nameOrPort;
-        bot = loadBots().find(b => String(b.ttyd_port) === String(port));
-      } else {
-        bot = getBotByName(nameOrPort);
-        if (!bot || !bot.ttyd_port) { res.writeHead(404); return res.end('bot not found'); }
-        port = bot.ttyd_port;
-      }
-      req.url = m[2] || '/';
-      delete req.headers['authorization'];
-      
-      // Add ttyd Basic Auth
-      if (bot && bot.ttyd_token) {
-        const auth = 'Basic ' + Buffer.from('bot:' + bot.ttyd_token).toString('base64');
-        req.headers['authorization'] = auth;
-      }
-      
-      return proxy.web(req, res, { target: 'http://127.0.0.1:' + port });
-    }
-  }
-
   // All other API endpoints require authentication
   if (!checkToken(req)) {
     res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -178,78 +118,151 @@ const server = http.createServer(async (req, res) => {
     } catch (e) { return json(res, { success: false, error: e.message }); }
   }
 
-  // 英文纠错
+  // 英文纠错 - 使用 Hugging Face 免费 API
   if (urlPath === '/api/correctEnglish' && req.method === 'POST') {
     const body = await readBody(req);
     try {
       const { text } = JSON.parse(body);
+      console.log('[correctEnglish] Received text:', text);
+      
       if (!text) return json(res, { success: false, error: 'no text' });
       
+      // Use Hugging Face Inference API (free)
       const hfUrl = 'https://api-inference.huggingface.co/models/facebook/bart-large-cnn';
-      const hfBody = JSON.stringify({ inputs: `Correct this English text: ${text}`, parameters: { max_length: 200, min_length: 10 } });
+      const prompt = `Correct this English text: ${text}`;
+      
+      const hfBody = JSON.stringify({
+        inputs: prompt,
+        parameters: {
+          max_length: 200,
+          min_length: 10
+        }
+      });
 
+      console.log('[correctEnglish] Calling Hugging Face API...');
       const https = require('https');
       const url = new URL(hfUrl);
-      const options = { hostname: url.hostname, path: url.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' } };
+      const options = {
+        hostname: url.hostname,
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      };
 
       const hfReq = https.request(options, (hfRes) => {
         let data = '';
         hfRes.on('data', chunk => data += chunk);
         hfRes.on('end', () => {
           try {
+            console.log('[correctEnglish] HF response:', data.substring(0, 200));
+            
             if (hfRes.statusCode !== 200) {
-              let corrected = text.replace(/\br\s+you\b/gi, 'are you').replace(/\bhow old a you\b/gi, 'how old are you').replace(/\bu\b/gi, 'you').replace(/\br\b/gi, 'are').replace(/^([a-z])/, (m) => m.toUpperCase());
+              console.error('[correctEnglish] HF API error:', hfRes.statusCode, data);
+              // Fallback to simple corrections
+              let corrected = text
+                .replace(/\br\s+you\b/gi, 'are you')
+                .replace(/\bhow old a you\b/gi, 'how old are you')
+                .replace(/\bi want test\b/gi, 'I want to test')
+                .replace(/\bthis is work\b/gi, 'this works')
+                .replace(/\biam\b/gi, 'I am')
+                .replace(/\bu\b/gi, 'you')
+                .replace(/\br\b/gi, 'are')
+                .replace(/^([a-z])/, (m) => m.toUpperCase())
+                .replace(/([^.!?])$/, '$1.');
               return json(res, { success: true, correctedText: corrected.trim() });
             }
+            
             const result = JSON.parse(data);
-            let correctedText = (result[0]?.summary_text || result[0]?.generated_text || text).replace(/^Correct this English text:\s*/i, '').replace(/^["']|["']$/g, '').trim();
-            json(res, { success: true, correctedText });
+            let correctedText = result[0]?.summary_text || result[0]?.generated_text || text;
+            
+            // Clean up the response
+            correctedText = correctedText
+              .replace(/^Correct this English text:\s*/i, '')
+              .replace(/^["']|["']$/g, '')
+              .trim();
+            
+            json(res, { success: true, correctedText: correctedText });
           } catch (e) {
-            let corrected = text.replace(/\br\s+you\b/gi, 'are you').replace(/\bu\b/gi, 'you').replace(/\br\b/gi, 'are').replace(/^([a-z])/, (m) => m.toUpperCase());
+            console.error('[correctEnglish] Parse error:', e.message);
+            // Fallback
+            let corrected = text
+              .replace(/\br\s+you\b/gi, 'are you')
+              .replace(/\bhow old a you\b/gi, 'how old are you')
+              .replace(/\bu\b/gi, 'you')
+              .replace(/\br\b/gi, 'are')
+              .replace(/^([a-z])/, (m) => m.toUpperCase());
             json(res, { success: true, correctedText: corrected.trim() });
           }
         });
       });
 
       hfReq.on('error', (e) => {
-        let corrected = text.replace(/\br\s+you\b/gi, 'are you').replace(/\bu\b/gi, 'you').replace(/\br\b/gi, 'are').replace(/^([a-z])/, (m) => m.toUpperCase());
+        console.error('[correctEnglish] Request error:', e.message);
+        // Fallback
+        let corrected = text
+          .replace(/\br\s+you\b/gi, 'are you')
+          .replace(/\bhow old a you\b/gi, 'how old are you')
+          .replace(/\bu\b/gi, 'you')
+          .replace(/\br\b/gi, 'are')
+          .replace(/^([a-z])/, (m) => m.toUpperCase());
         json(res, { success: true, correctedText: corrected.trim() });
       });
 
       hfReq.write(hfBody);
       hfReq.end();
       return;
+      
     } catch (e) {
+      console.error('[correctEnglish] Error:', e.message);
       return json(res, { success: false, error: e.message });
     }
+  }
+
+  const m = req.url.match(/^\/ttyd\/([^\/]+)(\/.*)?$/);
+  if (m) {
+    const nameOrPort = m[1];
+    let port;
+    let bot;
+    if (/^\d+$/.test(nameOrPort)) { 
+      port = nameOrPort;
+      bot = loadBots().find(b => String(b.ttyd_port) === String(port));
+    } else {
+      bot = getBotByName(nameOrPort);
+      if (!bot || !bot.ttyd_port) { res.writeHead(404); return res.end('bot not found'); }
+      port = bot.ttyd_port;
+    }
+    req.url = m[2] || '/'; 
+    delete req.headers['authorization'];
+    
+    // Add ttyd Basic Auth
+    if (bot && bot.ttyd_token) {
+      const auth = 'Basic ' + Buffer.from('bot:' + bot.ttyd_token).toString('base64');
+      req.headers['authorization'] = auth;
+    }
+    
+    return proxy.web(req, res, { target: 'http://127.0.0.1:' + port });
   }
 
   serveStatic(req, res);
 });
 
 server.on('upgrade', (req, socket, head) => {
+  if (!checkToken(req)) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+    socket.destroy();
+    return;
+  }
   const m = req.url.match(/^\/ttyd\/([^/]+)(\/.*)?$/);
   if (m) {
     const nameOrPort = m[1];
     let port;
-    let bot;
-    if (/^\d+$/.test(nameOrPort)) {
-      port = nameOrPort;
-      bot = loadBots().find(b => String(b.ttyd_port) === String(port));
-    } else {
-      bot = getBotByName(nameOrPort);
-      port = bot && bot.ttyd_port;
-    }
+    if (/^\d+$/.test(nameOrPort)) { port = nameOrPort; }
+    else { const bot = getBotByName(nameOrPort); port = bot && bot.ttyd_port; }
     if (!port) return socket.destroy();
     req.url = m[2] || '/';
     delete req.headers['authorization'];
-    
-    // Add ttyd Basic Auth for WebSocket
-    if (bot && bot.ttyd_token) {
-      const auth = 'Basic ' + Buffer.from('bot:' + bot.ttyd_token).toString('base64');
-      req.headers['authorization'] = auth;
-    }
-    
     proxy.ws(req, socket, head, { target: 'http://127.0.0.1:' + port });
   } else { socket.destroy(); }
 });
