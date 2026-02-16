@@ -178,6 +178,13 @@ const server = http.createServer(async (req, res) => {
     } catch (e) { return json(res, { success: false, error: e.message }); }
   }
 
+  if (urlPath === '/api/tmux-list' && req.method === 'GET') {
+    try {
+      const output = execSync('~/tools/tre', { timeout: 5000, encoding: 'utf8' });
+      return json(res, { success: true, output });
+    } catch (e) { return json(res, { success: false, error: e.message }); }
+  }
+
   // 英文纠错
   if (urlPath === '/api/correctEnglish' && req.method === 'POST') {
     const body = await readBody(req);
