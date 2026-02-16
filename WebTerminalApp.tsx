@@ -1,29 +1,30 @@
-import React, { useState, useEffect } from 'react';
-import { Terminal, Layout, Grid, Columns, Rows, Plus, Settings, Wifi, WifiOff, Maximize2, Minimize2, X, Menu } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Terminal, Columns, Rows, Maximize2, X, Send, Loader2, CheckCircle, History, Wifi, WifiOff, Menu } from 'lucide-react';
 import { TtydFrame } from './components/TtydFrame';
-import { SplitPaneLayout } from './components/SplitPaneLayout';
 import { LoginForm } from './components/LoginForm';
-
-interface TerminalPane {
-  id: string;
-  botName: string;
-  title: string;
-}
-
-type LayoutMode = 'single' | 'horizontal' | 'vertical' | 'grid-2x2' | 'grid-1x2' | 'grid-2x1';
+import { sendCommandToTmux } from './services/mockApi';
 
 const WebTerminalApp: React.FC = () => {
   const [token, setToken] = useState<string | null>(null);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
-  const [panes, setPanes] = useState<TerminalPane[]>([]);
-  const [layoutMode, setLayoutMode] = useState<LayoutMode>('single');
-  const [isInteracting, setIsInteracting] = useState(false);
+  const [botName, setBotName] = useState('cicy_master_xk_bot');
   const [showSidebar, setShowSidebar] = useState(true);
+  
+  // Command state
+  const [commandText, setCommandText] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [sendSuccess, setSendSuccess] = useState(false);
+  const [commandHistory, setCommandHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [tempDraft, setTempDraft] = useState('');
+  const [showHistory, setShowHistory] = useState(false);
+  
+  // Network state
   const [networkStatus, setNetworkStatus] = useState<'excellent' | 'good' | 'poor' | 'offline'>('good');
   const [networkLatency, setNetworkLatency] = useState<number | null>(null);
-  const [showAddPane, setShowAddPane] = useState(false);
-  const [newBotName, setNewBotName] = useState('');
-  const [newPaneTitle, setNewPaneTitle] = useState('');
+  
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const tmuxTarget = `master:${botName}.0`;
 
   // Check auth on mount
   useEffect(() => {
@@ -36,12 +37,11 @@ const WebTerminalApp: React.FC = () => {
           });
           if (res.ok) {
             setToken(savedToken);
-            // Initialize with default pane
-            setPanes([{
-              id: '1',
-              botName: 'cicy_master_xk_bot',
-              title: 'Terminal 1'
-            }]);
+            // Load command history
+            const savedHistory = localStorage.getItem('command_history');
+            if (savedHistory) {
+              setCommandHistory(JSON.parse(savedHistory));
+            }
           } else {
             localStorage.removeItem('token');
           }
@@ -53,6 +53,13 @@ const WebTerminalApp: React.FC = () => {
     };
     init();
   }, []);
+
+  // Save command history
+  useEffect(() => {
+    if (commandHistory.length > 0) {
+      localStorage.setItem('command_history', JSON.stringify(commandHistory));
+    }
+  }, [commandHistory]);
 
   // Network health check
   useEffect(() => {
@@ -85,167 +92,67 @@ const WebTerminalApp: React.FC = () => {
 
   const handleLogin = (newToken: string) => {
     setToken(newToken);
-    setPanes([{
-      id: '1',
-      botName: 'cicy_master_xk_bot',
-      title: 'Terminal 1'
-    }]);
   };
 
-  const handleAddPane = () => {
-    if (!newBotName.trim()) return;
-    
-    const newPane: TerminalPane = {
-      id: Date.now().toString(),
-      botName: newBotName.trim(),
-      title: newPaneTitle.trim() || `Terminal ${panes.length + 1}`
-    };
-    
-    setPanes(prev => [...prev, newPane]);
-    setNewBotName('');
-    setNewPaneTitle('');
-    setShowAddPane(false);
-    
-    // Auto adjust layout
-    if (panes.length === 1) setLayoutMode('horizontal');
-    else if (panes.length === 2) setLayoutMode('grid-1x2');
-    else if (panes.length === 3) setLayoutMode('grid-2x2');
-  };
+  const handleSendCommand = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!commandText.trim() || isSending) return;
 
-  const handleRemovePane = (id: string) => {
-    setPanes(prev => {
-      const filtered = prev.filter(p => p.id !== id);
-      if (filtered.length === 1) setLayoutMode('single');
-      else if (filtered.length === 2) setLayoutMode('horizontal');
-      return filtered;
+    const command = commandText.trim();
+    
+    // Add to history
+    setCommandHistory(prev => {
+      const newHistory = [command, ...prev.filter(cmd => cmd !== command)].slice(0, 50);
+      return newHistory;
     });
-  };
+    setHistoryIndex(-1);
+    setTempDraft('');
+    
+    setCommandText('');
+    setIsSending(true);
+    setSendSuccess(false);
 
-  const handleRemoveAllPanes = () => {
-    if (panes.length > 1) {
-      setPanes([panes[0]]);
-      setLayoutMode('single');
+    try {
+      await sendCommandToTmux(command, tmuxTarget);
+      setSendSuccess(true);
+      setTimeout(() => setSendSuccess(false), 2000);
+    } catch (error) {
+      console.error("Failed to send command", error);
+    } finally {
+      setIsSending(false);
+      setTimeout(() => textareaRef.current?.focus(), 50);
     }
   };
 
-  const renderTerminal = (pane: TerminalPane, showControls: boolean = true) => (
-    <div key={pane.id} className="relative w-full h-full bg-black">
-      <TtydFrame
-        url={`/ttyd/${pane.botName}/?token=${token}`}
-        isInteractingWithOverlay={isInteracting}
-      />
-      
-      {/* Terminal Header - Always visible */}
-      <div className="absolute top-0 left-0 right-0 h-8 bg-black/60 backdrop-blur-sm border-b border-gray-700/50 flex items-center justify-between px-3 z-10">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <Terminal size={12} className="text-blue-400 flex-shrink-0" />
-          <span className="text-xs text-white font-medium truncate">{pane.title}</span>
-          <span className="text-xs text-gray-500 truncate hidden sm:inline">({pane.botName})</span>
-        </div>
-        
-        {/* Always show close button if more than 1 pane */}
-        {panes.length > 1 && (
-          <button
-            onClick={() => handleRemovePane(pane.id)}
-            className="p-1 bg-red-600 hover:bg-red-500 text-white rounded transition-colors flex-shrink-0 ml-2"
-            title={`Close ${pane.title}`}
-          >
-            <X size={12} />
-          </button>
-        )}
-      </div>
-    </div>
-  );
-
-  const renderLayout = () => {
-    if (panes.length === 0) {
-      return (
-        <div className="w-full h-full flex items-center justify-center text-gray-500">
-          <div className="text-center">
-            <Terminal size={64} className="mx-auto mb-4 opacity-20" />
-            <p>No terminals</p>
-          </div>
-        </div>
-      );
+  const handleTmuxCommand = async (command: string) => {
+    setIsSending(true);
+    try {
+      await sendCommandToTmux(command, tmuxTarget);
+      setSendSuccess(true);
+      setTimeout(() => setSendSuccess(false), 2000);
+    } catch (error) {
+      console.error("Failed to execute tmux command", error);
+    } finally {
+      setIsSending(false);
     }
+  };
 
-    if (panes.length === 1 || layoutMode === 'single') {
-      return renderTerminal(panes[0], false);
-    }
+  const handleSelectHistory = (command: string) => {
+    setCommandText(command);
+    setShowHistory(false);
+    setHistoryIndex(-1);
+    setTempDraft(command);
+    setTimeout(() => textareaRef.current?.focus(), 50);
+  };
 
-    if (layoutMode === 'horizontal' && panes.length >= 2) {
-      return (
-        <SplitPaneLayout
-          direction="horizontal"
-          onInteractionStart={() => setIsInteracting(true)}
-          onInteractionEnd={() => setIsInteracting(false)}
-        >
-          {renderTerminal(panes[0])}
-          {renderTerminal(panes[1])}
-        </SplitPaneLayout>
-      );
-    }
+  const handleDeleteHistory = (e: React.MouseEvent, index: number) => {
+    e.stopPropagation();
+    setCommandHistory(prev => prev.filter((_, idx) => idx !== index));
+  };
 
-    if (layoutMode === 'vertical' && panes.length >= 2) {
-      return (
-        <SplitPaneLayout
-          direction="vertical"
-          onInteractionStart={() => setIsInteracting(true)}
-          onInteractionEnd={() => setIsInteracting(false)}
-        >
-          {renderTerminal(panes[0])}
-          {renderTerminal(panes[1])}
-        </SplitPaneLayout>
-      );
-    }
-
-    if (layoutMode === 'grid-1x2' && panes.length >= 2) {
-      return (
-        <SplitPaneLayout
-          direction="vertical"
-          onInteractionStart={() => setIsInteracting(true)}
-          onInteractionEnd={() => setIsInteracting(false)}
-        >
-          {renderTerminal(panes[0])}
-          <div className="w-full h-full flex gap-px bg-gray-800">
-            {panes.slice(1, 3).map(p => (
-              <div key={p.id} className="flex-1">
-                {renderTerminal(p)}
-              </div>
-            ))}
-          </div>
-        </SplitPaneLayout>
-      );
-    }
-
-    if (layoutMode === 'grid-2x1' && panes.length >= 2) {
-      return (
-        <SplitPaneLayout
-          direction="horizontal"
-          onInteractionStart={() => setIsInteracting(true)}
-          onInteractionEnd={() => setIsInteracting(false)}
-        >
-          {renderTerminal(panes[0])}
-          <div className="w-full h-full flex flex-col gap-px bg-gray-800">
-            {panes.slice(1, 3).map(p => (
-              <div key={p.id} className="flex-1">
-                {renderTerminal(p)}
-              </div>
-            ))}
-          </div>
-        </SplitPaneLayout>
-      );
-    }
-
-    if (layoutMode === 'grid-2x2') {
-      return (
-        <div className="w-full h-full grid grid-cols-2 grid-rows-2 gap-px bg-gray-800">
-          {panes.slice(0, 4).map(p => renderTerminal(p))}
-        </div>
-      );
-    }
-
-    return renderTerminal(panes[0]);
+  const handleClearAllHistory = () => {
+    setCommandHistory([]);
+    localStorage.removeItem('command_history');
   };
 
   if (isCheckingAuth) {
@@ -265,14 +172,14 @@ const WebTerminalApp: React.FC = () => {
       {/* Sidebar */}
       <div
         className={`relative bg-gray-900 border-r border-gray-800 transition-all duration-300 flex flex-col ${
-          showSidebar ? 'w-64' : 'w-0'
+          showSidebar ? 'w-80' : 'w-0'
         } overflow-hidden z-20`}
       >
         {/* Sidebar Header */}
         <div className="h-14 border-b border-gray-800 flex items-center justify-between px-4 flex-shrink-0">
           <div className="flex items-center gap-2">
             <Terminal size={20} className="text-blue-400" />
-            <span className="text-white font-semibold">Terminals</span>
+            <span className="text-white font-semibold">Terminal Control</span>
           </div>
           <button
             onClick={() => setShowSidebar(false)}
@@ -284,224 +191,213 @@ const WebTerminalApp: React.FC = () => {
 
         {/* Network Status */}
         <div className="px-4 py-3 border-b border-gray-800 flex-shrink-0">
-          <div className="flex items-center gap-2 text-sm">
-            {networkStatus === 'excellent' && <Wifi size={16} className="text-green-400" />}
-            {networkStatus === 'good' && <Wifi size={16} className="text-yellow-400" />}
-            {networkStatus === 'poor' && <Wifi size={16} className="text-orange-400" />}
-            {networkStatus === 'offline' && <WifiOff size={16} className="text-red-400" />}
-            <span className="text-gray-400">
-              {networkLatency !== null ? `${networkLatency}ms` : 'Offline'}
-            </span>
+          <div className="flex items-center justify-between">
+            <div className="text-xs text-gray-400 uppercase tracking-wide font-semibold">Status</div>
+            <div className="flex items-center gap-2 text-sm">
+              {networkStatus === 'excellent' && <Wifi size={16} className="text-green-400" />}
+              {networkStatus === 'good' && <Wifi size={16} className="text-yellow-400" />}
+              {networkStatus === 'poor' && <Wifi size={16} className="text-orange-400" />}
+              {networkStatus === 'offline' && <WifiOff size={16} className="text-red-400" />}
+              <span className="text-gray-400 font-mono text-xs">
+                {networkLatency !== null ? `${networkLatency}ms` : 'Offline'}
+              </span>
+            </div>
+          </div>
+          <div className="mt-2 text-xs text-gray-500">
+            Bot: <span className="text-blue-400 font-mono">{botName}</span>
           </div>
         </div>
 
-        {/* Layout Selector */}
+        {/* Tmux Controls */}
         <div className="px-4 py-3 border-b border-gray-800 flex-shrink-0">
-          <div className="flex items-center justify-between mb-3">
-            <div className="text-xs text-gray-400 uppercase tracking-wide font-semibold">Layout Mode</div>
-            {panes.length > 1 && (
-              <button
-                onClick={handleRemoveAllPanes}
-                className="text-xs px-2 py-1 bg-red-600 hover:bg-red-500 text-white rounded transition-colors font-medium"
-                title="Close all terminals except first"
-              >
-                Reset All
-              </button>
-            )}
-          </div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="text-xs text-gray-400 uppercase tracking-wide font-semibold mb-3">Tmux Split</div>
+          <div className="grid grid-cols-2 gap-2">
             <button
-              onClick={() => setLayoutMode('single')}
-              className={`p-3 rounded-lg border-2 transition-all ${
-                layoutMode === 'single'
-                  ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/50'
-                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-white'
-              }`}
-              title="Single Terminal"
-            >
-              <Maximize2 size={18} className="mx-auto mb-1" />
-              <div className="text-xs">Single</div>
-            </button>
-            
-            <button
-              onClick={() => setLayoutMode('horizontal')}
-              disabled={panes.length < 2}
-              className={`p-3 rounded-lg border-2 transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
-                layoutMode === 'horizontal'
-                  ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/50'
-                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-white'
-              }`}
-              title="Side by Side"
+              onClick={() => handleTmuxCommand(`tmux split-window -h -t ${tmuxTarget}`)}
+              className="p-3 bg-gray-800 hover:bg-gray-700 border-2 border-gray-700 hover:border-blue-500 text-gray-300 hover:text-white rounded-lg transition-all"
+              title="Split Horizontally (Side by Side)"
             >
               <Columns size={18} className="mx-auto mb-1" />
               <div className="text-xs">H-Split</div>
             </button>
             
             <button
-              onClick={() => setLayoutMode('vertical')}
-              disabled={panes.length < 2}
-              className={`p-3 rounded-lg border-2 transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
-                layoutMode === 'vertical'
-                  ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/50'
-                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-white'
-              }`}
-              title="Top and Bottom"
+              onClick={() => handleTmuxCommand(`tmux split-window -v -t ${tmuxTarget}`)}
+              className="p-3 bg-gray-800 hover:bg-gray-700 border-2 border-gray-700 hover:border-blue-500 text-gray-300 hover:text-white rounded-lg transition-all"
+              title="Split Vertically (Top and Bottom)"
             >
               <Rows size={18} className="mx-auto mb-1" />
               <div className="text-xs">V-Split</div>
             </button>
             
             <button
-              onClick={() => setLayoutMode('grid-2x2')}
-              disabled={panes.length < 3}
-              className={`p-3 rounded-lg border-2 transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
-                layoutMode === 'grid-2x2'
-                  ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/50'
-                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-white'
-              }`}
-              title="2x2 Grid"
+              onClick={() => handleTmuxCommand(`tmux resize-pane -Z -t ${tmuxTarget}`)}
+              className="p-3 bg-gray-800 hover:bg-gray-700 border-2 border-gray-700 hover:border-green-500 text-gray-300 hover:text-white rounded-lg transition-all"
+              title="Toggle Maximize Pane"
             >
-              <Grid size={18} className="mx-auto mb-1" />
-              <div className="text-xs">2×2</div>
+              <Maximize2 size={18} className="mx-auto mb-1" />
+              <div className="text-xs">Maximize</div>
             </button>
             
             <button
-              onClick={() => setLayoutMode('grid-1x2')}
-              disabled={panes.length < 2}
-              className={`p-3 rounded-lg border-2 transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
-                layoutMode === 'grid-1x2'
-                  ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/50'
-                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-white'
-              }`}
-              title="1 Top + 2 Bottom"
+              onClick={() => handleTmuxCommand(`tmux kill-pane -t ${tmuxTarget}`)}
+              className="p-3 bg-gray-800 hover:bg-red-600 border-2 border-gray-700 hover:border-red-500 text-gray-300 hover:text-white rounded-lg transition-all"
+              title="Close Current Pane"
             >
-              <Layout size={18} className="mx-auto mb-1" />
-              <div className="text-xs">1+2</div>
-            </button>
-            
-            <button
-              onClick={() => setLayoutMode('grid-2x1')}
-              disabled={panes.length < 2}
-              className={`p-3 rounded-lg border-2 transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
-                layoutMode === 'grid-2x1'
-                  ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/50'
-                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-white'
-              }`}
-              title="2 Left + 1 Right"
-            >
-              <Layout size={18} className="mx-auto rotate-90 mb-1" />
-              <div className="text-xs">2+1</div>
+              <X size={18} className="mx-auto mb-1" />
+              <div className="text-xs">Close</div>
             </button>
           </div>
         </div>
 
-        {/* Terminal List */}
-        <div className="flex-1 overflow-y-auto px-4 py-3">
+        {/* Command Input */}
+        <div className="flex-1 flex flex-col px-4 py-3 min-h-0">
           <div className="flex items-center justify-between mb-3">
-            <div className="text-xs text-gray-400 uppercase tracking-wide font-semibold">
-              Active Terminals ({panes.length})
-            </div>
-          </div>
-          <div className="space-y-2">
-            {panes.map((pane, idx) => (
-              <div
-                key={pane.id}
-                className="bg-gray-800/50 rounded-lg p-3 border border-gray-700 hover:border-blue-500 hover:bg-gray-800 transition-all"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <Terminal size={14} className="text-blue-400 flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm text-white font-medium truncate">{pane.title}</div>
-                      <div className="text-xs text-gray-500 truncate">{pane.botName}</div>
-                    </div>
-                  </div>
-                  {panes.length > 1 && (
-                    <button
-                      onClick={() => handleRemovePane(pane.id)}
-                      className="p-1.5 bg-red-600 hover:bg-red-500 text-white rounded transition-colors flex-shrink-0"
-                      title={`Close ${pane.title}`}
-                    >
-                      <X size={12} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Add Terminal Button */}
-        <div className="p-4 border-t border-gray-800 flex-shrink-0">
-          {!showAddPane ? (
+            <div className="text-xs text-gray-400 uppercase tracking-wide font-semibold">Command</div>
             <button
-              onClick={() => setShowAddPane(true)}
-              className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors flex items-center justify-center gap-2 font-medium shadow-lg"
+              onClick={() => setShowHistory(!showHistory)}
+              className={`p-1.5 rounded transition-all ${
+                showHistory
+                  ? 'bg-blue-600 text-white'
+                  : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+              }`}
+              title="Command History"
             >
-              <Plus size={18} />
-              Add New Terminal
+              <History size={16} />
             </button>
-          ) : (
-            <div className="space-y-3">
-              <div className="text-sm text-gray-400 font-medium mb-2">Add New Terminal</div>
-              <input
-                type="text"
-                value={newPaneTitle}
-                onChange={(e) => setNewPaneTitle(e.target.value)}
-                placeholder="Title (e.g., Terminal 2)"
-                className="w-full bg-gray-800 text-white rounded-lg px-3 py-2.5 text-sm border-2 border-gray-700 outline-none focus:border-blue-500 transition-colors"
-              />
-              <input
-                type="text"
-                value={newBotName}
-                onChange={(e) => setNewBotName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleAddPane()}
-                placeholder="Bot name (required)"
-                className="w-full bg-gray-800 text-white rounded-lg px-3 py-2.5 text-sm border-2 border-gray-700 outline-none focus:border-blue-500 transition-colors"
-                autoFocus
-              />
-              <div className="flex gap-2">
-                <button
-                  onClick={handleAddPane}
-                  disabled={!newBotName.trim()}
-                  className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-                >
-                  Add
-                </button>
-                <button
-                  onClick={() => {
-                    setShowAddPane(false);
-                    setNewBotName('');
-                    setNewPaneTitle('');
+          </div>
+
+          {!showHistory ? (
+            <form onSubmit={handleSendCommand} className="flex-1 flex flex-col min-h-0">
+              <div className="flex-1 flex flex-col min-h-0">
+                <textarea
+                  ref={textareaRef}
+                  value={commandText}
+                  onChange={(e) => {
+                    setCommandText(e.target.value);
+                    if (historyIndex === -1) {
+                      setTempDraft(e.target.value);
+                    }
                   }}
-                  className="px-4 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg text-sm transition-colors"
-                >
-                  Cancel
-                </button>
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                      e.preventDefault();
+                      handleSendCommand();
+                    }
+                    else if (e.key === 'ArrowUp') {
+                      const textarea = e.currentTarget;
+                      const cursorPos = textarea.selectionStart;
+                      const textBeforeCursor = textarea.value.substring(0, cursorPos);
+                      const isOnFirstLine = !textBeforeCursor.includes('\n');
+                      
+                      if (isOnFirstLine && commandHistory.length > 0) {
+                        e.preventDefault();
+                        if (historyIndex === -1) {
+                          setTempDraft(commandText);
+                          setHistoryIndex(0);
+                          setCommandText(commandHistory[0]);
+                        } else if (historyIndex < commandHistory.length - 1) {
+                          const newIndex = historyIndex + 1;
+                          setHistoryIndex(newIndex);
+                          setCommandText(commandHistory[newIndex]);
+                        }
+                      }
+                    }
+                    else if (e.key === 'ArrowDown') {
+                      const textarea = e.currentTarget;
+                      const cursorPos = textarea.selectionStart;
+                      const textAfterCursor = textarea.value.substring(cursorPos);
+                      const isOnLastLine = !textAfterCursor.includes('\n');
+                      
+                      if (isOnLastLine) {
+                        e.preventDefault();
+                        if (historyIndex > 0) {
+                          const newIndex = historyIndex - 1;
+                          setHistoryIndex(newIndex);
+                          setCommandText(commandHistory[newIndex]);
+                        } else if (historyIndex === 0) {
+                          setHistoryIndex(-1);
+                          setCommandText(tempDraft);
+                        }
+                      }
+                    }
+                  }}
+                  placeholder="Type command... (Enter to send, Shift+Enter for new line)"
+                  className="w-full flex-1 bg-gray-800 text-white rounded-lg px-3 py-2.5 text-sm border-2 border-gray-700 outline-none focus:border-blue-500 transition-colors resize-none font-mono"
+                  disabled={isSending}
+                />
+              </div>
+              
+              <button
+                type="submit"
+                disabled={!commandText.trim() || isSending}
+                className="mt-3 w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium flex items-center justify-center gap-2"
+              >
+                {isSending ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    Sending...
+                  </>
+                ) : sendSuccess ? (
+                  <>
+                    <CheckCircle size={16} />
+                    Sent!
+                  </>
+                ) : (
+                  <>
+                    <Send size={16} />
+                    Send Command
+                  </>
+                )}
+              </button>
+            </form>
+          ) : (
+            <div className="flex-1 flex flex-col min-h-0">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-gray-500">History ({commandHistory.length})</span>
+                {commandHistory.length > 0 && (
+                  <button
+                    onClick={handleClearAllHistory}
+                    className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                  >
+                    Clear All
+                  </button>
+                )}
+              </div>
+              <div className="flex-1 overflow-y-auto space-y-1 min-h-0">
+                {commandHistory.length > 0 ? (
+                  commandHistory.map((cmd, idx) => (
+                    <div
+                      key={idx}
+                      onClick={() => handleSelectHistory(cmd)}
+                      className="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded cursor-pointer text-gray-300 hover:text-white transition-colors group flex items-center justify-between gap-2"
+                    >
+                      <span className="truncate text-sm font-mono flex-1">{cmd}</span>
+                      <button
+                        onClick={(e) => handleDeleteHistory(e, idx)}
+                        className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 transition-opacity flex-shrink-0"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-center text-gray-600 text-sm py-8">
+                    No command history yet
+                  </div>
+                )}
               </div>
             </div>
           )}
         </div>
       </div>
 
-      {/* Main Content */}
+      {/* Main Terminal */}
       <div className="flex-1 relative">
-        {renderLayout()}
-
-        {/* Quick Actions */}
-        <div className="absolute top-4 right-4 z-30 flex gap-2">
-          {/* Reset to Single Terminal */}
-          {panes.length > 1 && (
-            <button
-              onClick={handleRemoveAllPanes}
-              className="px-3 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg transition-all shadow-lg flex items-center gap-2 font-medium"
-              title="Close all terminals except first"
-            >
-              <X size={16} />
-              <span className="text-sm hidden sm:inline">Reset All</span>
-            </button>
-          )}
-        </div>
+        <TtydFrame
+          url={`/ttyd/${botName}/?token=${token}`}
+          isInteractingWithOverlay={false}
+        />
 
         {/* Toggle Sidebar Button */}
         {!showSidebar && (
