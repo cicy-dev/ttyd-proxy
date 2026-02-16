@@ -129,27 +129,28 @@ const WebTerminalApp: React.FC = () => {
   };
 
   const renderTerminal = (pane: TerminalPane, showControls: boolean = true) => (
-    <div key={pane.id} className="relative w-full h-full bg-black group">
+    <div key={pane.id} className="relative w-full h-full bg-black">
       <TtydFrame
         url={`/ttyd/${pane.botName}/?token=${token}`}
         isInteractingWithOverlay={isInteracting}
       />
       
-      {/* Terminal Header - Always show on hover */}
-      <div className="absolute top-0 left-0 right-0 h-10 bg-gradient-to-b from-black/80 to-transparent flex items-center justify-between px-3 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-        <div className="flex items-center gap-2">
-          <Terminal size={14} className="text-blue-400" />
-          <span className="text-xs text-white font-medium">{pane.title}</span>
-          <span className="text-xs text-gray-500">({pane.botName})</span>
+      {/* Terminal Header - Always visible */}
+      <div className="absolute top-0 left-0 right-0 h-8 bg-black/60 backdrop-blur-sm border-b border-gray-700/50 flex items-center justify-between px-3 z-10">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <Terminal size={12} className="text-blue-400 flex-shrink-0" />
+          <span className="text-xs text-white font-medium truncate">{pane.title}</span>
+          <span className="text-xs text-gray-500 truncate hidden sm:inline">({pane.botName})</span>
         </div>
         
         {/* Always show close button if more than 1 pane */}
         {panes.length > 1 && (
           <button
             onClick={() => handleRemovePane(pane.id)}
-            className="p-1 bg-red-600/80 hover:bg-red-500 text-white rounded transition-colors"
+            className="p-1 bg-red-600 hover:bg-red-500 text-white rounded transition-colors flex-shrink-0 ml-2"
+            title={`Close ${pane.title}`}
           >
-            <X size={14} />
+            <X size={12} />
           </button>
         )}
       </div>
@@ -296,131 +297,132 @@ const WebTerminalApp: React.FC = () => {
 
         {/* Layout Selector */}
         <div className="px-4 py-3 border-b border-gray-800 flex-shrink-0">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-xs text-gray-500 uppercase tracking-wide">Layout</div>
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-xs text-gray-400 uppercase tracking-wide font-semibold">Layout Mode</div>
             {panes.length > 1 && (
               <button
                 onClick={handleRemoveAllPanes}
-                className="text-xs px-2 py-1 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded transition-colors"
+                className="text-xs px-2 py-1 bg-red-600 hover:bg-red-500 text-white rounded transition-colors font-medium"
                 title="Close all terminals except first"
               >
-                Reset
+                Reset All
               </button>
             )}
           </div>
           <div className="grid grid-cols-3 gap-2">
             <button
               onClick={() => setLayoutMode('single')}
-              className={`p-2 rounded border transition-all ${
+              className={`p-3 rounded-lg border-2 transition-all ${
                 layoutMode === 'single'
-                  ? 'bg-blue-600 border-blue-500 text-white'
-                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-750 hover:text-white'
+                  ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/50'
+                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-white'
               }`}
-              title="Single"
+              title="Single Terminal"
             >
-              <Maximize2 size={16} className="mx-auto" />
+              <Maximize2 size={18} className="mx-auto mb-1" />
+              <div className="text-xs">Single</div>
             </button>
             
             <button
               onClick={() => setLayoutMode('horizontal')}
               disabled={panes.length < 2}
-              className={`p-2 rounded border transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
+              className={`p-3 rounded-lg border-2 transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
                 layoutMode === 'horizontal'
-                  ? 'bg-blue-600 border-blue-500 text-white'
-                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-750 hover:text-white'
+                  ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/50'
+                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-white'
               }`}
-              title="Horizontal"
+              title="Side by Side"
             >
-              <Columns size={16} className="mx-auto" />
+              <Columns size={18} className="mx-auto mb-1" />
+              <div className="text-xs">H-Split</div>
             </button>
             
             <button
               onClick={() => setLayoutMode('vertical')}
               disabled={panes.length < 2}
-              className={`p-2 rounded border transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
+              className={`p-3 rounded-lg border-2 transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
                 layoutMode === 'vertical'
-                  ? 'bg-blue-600 border-blue-500 text-white'
-                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-750 hover:text-white'
+                  ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/50'
+                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-white'
               }`}
-              title="Vertical"
+              title="Top and Bottom"
             >
-              <Rows size={16} className="mx-auto" />
+              <Rows size={18} className="mx-auto mb-1" />
+              <div className="text-xs">V-Split</div>
             </button>
             
             <button
               onClick={() => setLayoutMode('grid-2x2')}
               disabled={panes.length < 3}
-              className={`p-2 rounded border transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
+              className={`p-3 rounded-lg border-2 transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
                 layoutMode === 'grid-2x2'
-                  ? 'bg-blue-600 border-blue-500 text-white'
-                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-750 hover:text-white'
+                  ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/50'
+                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-white'
               }`}
-              title="Grid 2x2"
+              title="2x2 Grid"
             >
-              <Grid size={16} className="mx-auto" />
+              <Grid size={18} className="mx-auto mb-1" />
+              <div className="text-xs">2×2</div>
             </button>
             
             <button
               onClick={() => setLayoutMode('grid-1x2')}
               disabled={panes.length < 2}
-              className={`p-2 rounded border transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
+              className={`p-3 rounded-lg border-2 transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
                 layoutMode === 'grid-1x2'
-                  ? 'bg-blue-600 border-blue-500 text-white'
-                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-750 hover:text-white'
+                  ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/50'
+                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-white'
               }`}
-              title="Grid 1+2"
+              title="1 Top + 2 Bottom"
             >
-              <Layout size={16} className="mx-auto" />
+              <Layout size={18} className="mx-auto mb-1" />
+              <div className="text-xs">1+2</div>
             </button>
             
             <button
               onClick={() => setLayoutMode('grid-2x1')}
               disabled={panes.length < 2}
-              className={`p-2 rounded border transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
+              className={`p-3 rounded-lg border-2 transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
                 layoutMode === 'grid-2x1'
-                  ? 'bg-blue-600 border-blue-500 text-white'
-                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-750 hover:text-white'
+                  ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/50'
+                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-white'
               }`}
-              title="Grid 2+1"
+              title="2 Left + 1 Right"
             >
-              <Layout size={16} className="mx-auto rotate-90" />
+              <Layout size={18} className="mx-auto rotate-90 mb-1" />
+              <div className="text-xs">2+1</div>
             </button>
           </div>
         </div>
 
         {/* Terminal List */}
         <div className="flex-1 overflow-y-auto px-4 py-3">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-xs text-gray-500 uppercase tracking-wide">
-              Terminals ({panes.length})
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-xs text-gray-400 uppercase tracking-wide font-semibold">
+              Active Terminals ({panes.length})
             </div>
-            {panes.length > 1 && (
-              <button
-                onClick={handleRemoveAllPanes}
-                className="text-xs text-red-400 hover:text-red-300 transition-colors"
-                title="Close all except first"
-              >
-                Close All
-              </button>
-            )}
           </div>
           <div className="space-y-2">
             {panes.map((pane, idx) => (
               <div
                 key={pane.id}
-                className="bg-gray-800 rounded-lg p-3 border border-gray-700 hover:border-blue-500 transition-colors group"
+                className="bg-gray-800/50 rounded-lg p-3 border border-gray-700 hover:border-blue-500 hover:bg-gray-800 transition-all"
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm text-white font-medium truncate">{pane.title}</div>
-                    <div className="text-xs text-gray-500 truncate">{pane.botName}</div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <Terminal size={14} className="text-blue-400 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-white font-medium truncate">{pane.title}</div>
+                      <div className="text-xs text-gray-500 truncate">{pane.botName}</div>
+                    </div>
                   </div>
                   {panes.length > 1 && (
                     <button
                       onClick={() => handleRemovePane(pane.id)}
-                      className="p-1 opacity-0 group-hover:opacity-100 hover:bg-red-600 text-gray-400 hover:text-white rounded transition-all"
+                      className="p-1.5 bg-red-600 hover:bg-red-500 text-white rounded transition-colors flex-shrink-0"
+                      title={`Close ${pane.title}`}
                     >
-                      <X size={14} />
+                      <X size={12} />
                     </button>
                   )}
                 </div>
@@ -434,34 +436,35 @@ const WebTerminalApp: React.FC = () => {
           {!showAddPane ? (
             <button
               onClick={() => setShowAddPane(true)}
-              className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
+              className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors flex items-center justify-center gap-2 font-medium shadow-lg"
             >
               <Plus size={18} />
-              Add Terminal
+              Add New Terminal
             </button>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-3">
+              <div className="text-sm text-gray-400 font-medium mb-2">Add New Terminal</div>
               <input
                 type="text"
                 value={newPaneTitle}
                 onChange={(e) => setNewPaneTitle(e.target.value)}
-                placeholder="Title (optional)"
-                className="w-full bg-gray-800 text-white rounded px-3 py-2 text-sm border border-gray-700 outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Title (e.g., Terminal 2)"
+                className="w-full bg-gray-800 text-white rounded-lg px-3 py-2.5 text-sm border-2 border-gray-700 outline-none focus:border-blue-500 transition-colors"
               />
               <input
                 type="text"
                 value={newBotName}
                 onChange={(e) => setNewBotName(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleAddPane()}
-                placeholder="Bot name..."
-                className="w-full bg-gray-800 text-white rounded px-3 py-2 text-sm border border-gray-700 outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Bot name (required)"
+                className="w-full bg-gray-800 text-white rounded-lg px-3 py-2.5 text-sm border-2 border-gray-700 outline-none focus:border-blue-500 transition-colors"
                 autoFocus
               />
               <div className="flex gap-2">
                 <button
                   onClick={handleAddPane}
                   disabled={!newBotName.trim()}
-                  className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
                 >
                   Add
                 </button>
@@ -471,7 +474,7 @@ const WebTerminalApp: React.FC = () => {
                     setNewBotName('');
                     setNewPaneTitle('');
                   }}
-                  className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white rounded text-sm transition-colors"
+                  className="px-4 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg text-sm transition-colors"
                 >
                   Cancel
                 </button>
@@ -491,11 +494,11 @@ const WebTerminalApp: React.FC = () => {
           {panes.length > 1 && (
             <button
               onClick={handleRemoveAllPanes}
-              className="p-2 bg-red-600/90 hover:bg-red-500 border border-red-500 text-white rounded-lg transition-all shadow-lg backdrop-blur-sm flex items-center gap-2"
+              className="px-3 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg transition-all shadow-lg flex items-center gap-2 font-medium"
               title="Close all terminals except first"
             >
-              <X size={18} />
-              <span className="text-sm font-medium hidden sm:inline">Close All</span>
+              <X size={16} />
+              <span className="text-sm hidden sm:inline">Reset All</span>
             </button>
           )}
         </div>
