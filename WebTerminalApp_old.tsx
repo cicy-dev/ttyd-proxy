@@ -1,26 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Terminal, Columns, Rows, Maximize2, X, Send, Loader2, CheckCircle, History, Wifi, WifiOff, Menu, RefreshCw } from 'lucide-react';
+import { Terminal, Columns, Rows, Maximize2, X, Send, Loader2, CheckCircle, History, Wifi, WifiOff, Menu } from 'lucide-react';
 import { TtydFrame } from './components/TtydFrame';
 import { LoginForm } from './components/LoginForm';
 import { sendCommandToTmux } from './services/mockApi';
 
-interface TmuxPane {
-  session: string;
-  window: string;
-  pane: string;
-  target: string;
-  botName: string;
-}
-
 const WebTerminalApp: React.FC = () => {
   const [token, setToken] = useState<string | null>(null);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [botName, setBotName] = useState('cicy_master_xk_bot');
   const [showSidebar, setShowSidebar] = useState(true);
-  
-  // Tmux panes
-  const [tmuxPanes, setTmuxPanes] = useState<TmuxPane[]>([]);
-  const [selectedPane, setSelectedPane] = useState<TmuxPane | null>(null);
-  const [isLoadingPanes, setIsLoadingPanes] = useState(false);
   
   // Command state
   const [commandText, setCommandText] = useState('');
@@ -36,64 +24,7 @@ const WebTerminalApp: React.FC = () => {
   const [networkLatency, setNetworkLatency] = useState<number | null>(null);
   
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  // Parse tre output
-  const parseTreOutput = (output: string): TmuxPane[] => {
-    const lines = output.trim().split('\n');
-    const panes: TmuxPane[] = [];
-    let currentSession = '';
-
-    for (const line of lines) {
-      // Skip tree characters and empty lines
-      const cleaned = line.replace(/^[│├└─\s]+/, '').trim();
-      if (!cleaned) continue;
-
-      // Session line (no colon)
-      if (!line.includes(':') && /^[a-z_]+$/.test(cleaned.split(' ')[0])) {
-        currentSession = cleaned.split(' ')[0];
-      }
-      // Pane line (has colon, is a target)
-      else if (cleaned.includes(':') && cleaned.includes('.')) {
-        const target = cleaned;
-        const parts = target.split(':');
-        if (parts.length === 2) {
-          const [session, rest] = parts;
-          const [botName, paneNum] = rest.split('.');
-          panes.push({
-            session,
-            window: '0',
-            pane: paneNum || '0',
-            target,
-            botName
-          });
-        }
-      }
-    }
-
-    return panes;
-  };
-
-  // Load tmux panes
-  const loadTmuxPanes = async () => {
-    setIsLoadingPanes(true);
-    try {
-      const res = await fetch('/api/tmux-list', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (data.success && data.output) {
-        const panes = parseTreOutput(data.output);
-        setTmuxPanes(panes);
-        if (panes.length > 0 && !selectedPane) {
-          setSelectedPane(panes[0]);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to load tmux panes', error);
-    } finally {
-      setIsLoadingPanes(false);
-    }
-  };
+  const tmuxTarget = `master:${botName}.0`;
 
   // Check auth on mount
   useEffect(() => {
@@ -106,6 +37,7 @@ const WebTerminalApp: React.FC = () => {
           });
           if (res.ok) {
             setToken(savedToken);
+            // Load command history
             const savedHistory = localStorage.getItem('command_history');
             if (savedHistory) {
               setCommandHistory(JSON.parse(savedHistory));
@@ -121,13 +53,6 @@ const WebTerminalApp: React.FC = () => {
     };
     init();
   }, []);
-
-  // Load panes when token is available
-  useEffect(() => {
-    if (token) {
-      loadTmuxPanes();
-    }
-  }, [token]);
 
   // Save command history
   useEffect(() => {
@@ -171,10 +96,11 @@ const WebTerminalApp: React.FC = () => {
 
   const handleSendCommand = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!commandText.trim() || isSending || !selectedPane) return;
+    if (!commandText.trim() || isSending) return;
 
     const command = commandText.trim();
     
+    // Add to history
     setCommandHistory(prev => {
       const newHistory = [command, ...prev.filter(cmd => cmd !== command)].slice(0, 50);
       return newHistory;
@@ -187,7 +113,7 @@ const WebTerminalApp: React.FC = () => {
     setSendSuccess(false);
 
     try {
-      await sendCommandToTmux(command, selectedPane.target);
+      await sendCommandToTmux(command, tmuxTarget);
       setSendSuccess(true);
       setTimeout(() => setSendSuccess(false), 2000);
     } catch (error) {
@@ -199,15 +125,11 @@ const WebTerminalApp: React.FC = () => {
   };
 
   const handleTmuxCommand = async (command: string) => {
-    if (!selectedPane) return;
     setIsSending(true);
     try {
-      await sendCommandToTmux(command, selectedPane.target);
+      await sendCommandToTmux(command, tmuxTarget);
       setSendSuccess(true);
-      setTimeout(() => {
-        setSendSuccess(false);
-        loadTmuxPanes(); // Refresh pane list after tmux command
-      }, 1000);
+      setTimeout(() => setSendSuccess(false), 2000);
     } catch (error) {
       console.error("Failed to execute tmux command", error);
     } finally {
@@ -281,90 +203,52 @@ const WebTerminalApp: React.FC = () => {
               </span>
             </div>
           </div>
-        </div>
-
-        {/* Tmux Panes List */}
-        <div className="flex-1 flex flex-col px-4 py-3 min-h-0 border-b border-gray-800">
-          <div className="flex items-center justify-between mb-3">
-            <div className="text-xs text-gray-400 uppercase tracking-wide font-semibold">
-              Tmux Panes ({tmuxPanes.length})
-            </div>
-            <button
-              onClick={loadTmuxPanes}
-              disabled={isLoadingPanes}
-              className="p-1.5 rounded transition-all text-gray-400 hover:bg-gray-800 hover:text-white disabled:opacity-50"
-              title="Refresh"
-            >
-              <RefreshCw size={16} className={isLoadingPanes ? 'animate-spin' : ''} />
-            </button>
-          </div>
-
-          <div className="flex-1 overflow-y-auto space-y-1 min-h-0">
-            {tmuxPanes.map((pane, idx) => (
-              <button
-                key={idx}
-                onClick={() => setSelectedPane(pane)}
-                className={`w-full text-left px-3 py-2 rounded transition-all ${
-                  selectedPane?.target === pane.target
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-white'
-                }`}
-              >
-                <div className="text-xs font-mono truncate">{pane.target}</div>
-                <div className="text-xs opacity-70 truncate">{pane.botName}</div>
-              </button>
-            ))}
-            {tmuxPanes.length === 0 && !isLoadingPanes && (
-              <div className="text-center text-gray-600 text-sm py-8">
-                No tmux panes found
-              </div>
-            )}
+          <div className="mt-2 text-xs text-gray-500">
+            Bot: <span className="text-blue-400 font-mono">{botName}</span>
           </div>
         </div>
 
         {/* Tmux Controls */}
-        {selectedPane && (
-          <div className="px-4 py-3 border-b border-gray-800 flex-shrink-0">
-            <div className="text-xs text-gray-400 uppercase tracking-wide font-semibold mb-3">Tmux Split</div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() => handleTmuxCommand(`tmux split-window -h -t ${selectedPane.target}`)}
-                className="p-3 bg-gray-800 hover:bg-gray-700 border-2 border-gray-700 hover:border-blue-500 text-gray-300 hover:text-white rounded-lg transition-all"
-                title="Split Horizontally"
-              >
-                <Columns size={18} className="mx-auto mb-1" />
-                <div className="text-xs">H-Split</div>
-              </button>
-              
-              <button
-                onClick={() => handleTmuxCommand(`tmux split-window -v -t ${selectedPane.target}`)}
-                className="p-3 bg-gray-800 hover:bg-gray-700 border-2 border-gray-700 hover:border-blue-500 text-gray-300 hover:text-white rounded-lg transition-all"
-                title="Split Vertically"
-              >
-                <Rows size={18} className="mx-auto mb-1" />
-                <div className="text-xs">V-Split</div>
-              </button>
-              
-              <button
-                onClick={() => handleTmuxCommand(`tmux resize-pane -Z -t ${selectedPane.target}`)}
-                className="p-3 bg-gray-800 hover:bg-gray-700 border-2 border-gray-700 hover:border-green-500 text-gray-300 hover:text-white rounded-lg transition-all"
-                title="Toggle Maximize"
-              >
-                <Maximize2 size={18} className="mx-auto mb-1" />
-                <div className="text-xs">Maximize</div>
-              </button>
-              
-              <button
-                onClick={() => handleTmuxCommand(`tmux kill-pane -t ${selectedPane.target}`)}
-                className="p-3 bg-gray-800 hover:bg-red-600 border-2 border-gray-700 hover:border-red-500 text-gray-300 hover:text-white rounded-lg transition-all"
-                title="Close Pane"
-              >
-                <X size={18} className="mx-auto mb-1" />
-                <div className="text-xs">Close</div>
-              </button>
-            </div>
+        <div className="px-4 py-3 border-b border-gray-800 flex-shrink-0">
+          <div className="text-xs text-gray-400 uppercase tracking-wide font-semibold mb-3">Tmux Split</div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => handleTmuxCommand(`tmux split-window -h -t ${tmuxTarget}`)}
+              className="p-3 bg-gray-800 hover:bg-gray-700 border-2 border-gray-700 hover:border-blue-500 text-gray-300 hover:text-white rounded-lg transition-all"
+              title="Split Horizontally (Side by Side)"
+            >
+              <Columns size={18} className="mx-auto mb-1" />
+              <div className="text-xs">H-Split</div>
+            </button>
+            
+            <button
+              onClick={() => handleTmuxCommand(`tmux split-window -v -t ${tmuxTarget}`)}
+              className="p-3 bg-gray-800 hover:bg-gray-700 border-2 border-gray-700 hover:border-blue-500 text-gray-300 hover:text-white rounded-lg transition-all"
+              title="Split Vertically (Top and Bottom)"
+            >
+              <Rows size={18} className="mx-auto mb-1" />
+              <div className="text-xs">V-Split</div>
+            </button>
+            
+            <button
+              onClick={() => handleTmuxCommand(`tmux resize-pane -Z -t ${tmuxTarget}`)}
+              className="p-3 bg-gray-800 hover:bg-gray-700 border-2 border-gray-700 hover:border-green-500 text-gray-300 hover:text-white rounded-lg transition-all"
+              title="Toggle Maximize Pane"
+            >
+              <Maximize2 size={18} className="mx-auto mb-1" />
+              <div className="text-xs">Maximize</div>
+            </button>
+            
+            <button
+              onClick={() => handleTmuxCommand(`tmux kill-pane -t ${tmuxTarget}`)}
+              className="p-3 bg-gray-800 hover:bg-red-600 border-2 border-gray-700 hover:border-red-500 text-gray-300 hover:text-white rounded-lg transition-all"
+              title="Close Current Pane"
+            >
+              <X size={18} className="mx-auto mb-1" />
+              <div className="text-xs">Close</div>
+            </button>
           </div>
-        )}
+        </div>
 
         {/* Command Input */}
         <div className="flex-1 flex flex-col px-4 py-3 min-h-0">
@@ -438,15 +322,15 @@ const WebTerminalApp: React.FC = () => {
                       }
                     }
                   }}
-                  placeholder="Type command..."
+                  placeholder="Type command... (Enter to send, Shift+Enter for new line)"
                   className="w-full flex-1 bg-gray-800 text-white rounded-lg px-3 py-2.5 text-sm border-2 border-gray-700 outline-none focus:border-blue-500 transition-colors resize-none font-mono"
-                  disabled={isSending || !selectedPane}
+                  disabled={isSending}
                 />
               </div>
               
               <button
                 type="submit"
-                disabled={!commandText.trim() || isSending || !selectedPane}
+                disabled={!commandText.trim() || isSending}
                 className="mt-3 w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium flex items-center justify-center gap-2"
               >
                 {isSending ? (
@@ -508,36 +392,12 @@ const WebTerminalApp: React.FC = () => {
         </div>
       </div>
 
-      {/* Main Terminal Area */}
+      {/* Main Terminal */}
       <div className="flex-1 relative">
-        {/* Render all iframes, hide non-selected ones */}
-        {tmuxPanes.map((pane) => (
-          <div
-            key={pane.target}
-            style={{ display: selectedPane?.target === pane.target ? 'block' : 'none' }}
-            className="absolute inset-0"
-          >
-            <TtydFrame
-              url={`/ttyd/${pane.botName}/?token=${token}`}
-              isInteractingWithOverlay={false}
-            />
-          </div>
-        ))}
-
-        {tmuxPanes.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center text-gray-500">
-            <div className="text-center">
-              <Terminal size={64} className="mx-auto mb-4 opacity-20" />
-              <p>No tmux panes available</p>
-              <button
-                onClick={loadTmuxPanes}
-                className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors"
-              >
-                Refresh
-              </button>
-            </div>
-          </div>
-        )}
+        <TtydFrame
+          url={`/ttyd/${botName}/?token=${token}`}
+          isInteractingWithOverlay={false}
+        />
 
         {/* Toggle Sidebar Button */}
         {!showSidebar && (
