@@ -3,9 +3,41 @@ const httpProxy = require('http-proxy');
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const os = require('os');
 
 const PORT = 14443;
-const TOKEN = '123456';
+
+// Load or generate token from ~/personal/global.json
+function loadOrGenerateToken() {
+  const configPath = path.join(os.homedir(), 'personal', 'global.json');
+  const configDir = path.dirname(configPath);
+
+  try {
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true });
+    }
+
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      if (config.api_token) {
+        console.log(`✓ Loaded token from ${configPath}`);
+        return config.api_token;
+      }
+    }
+
+    const crypto = require('crypto');
+    const newToken = crypto.randomBytes(32).toString('hex');
+    const config = { api_token: newToken };
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+    console.log(`✓ Generated new token and saved to ${configPath}`);
+    return newToken;
+  } catch (e) {
+    console.error('Error loading/generating token:', e.message);
+    return '123456';
+  }
+}
+
+const TOKEN = loadOrGenerateToken();
 
 function checkToken(req) {
   const url = new URL(req.url, 'http://localhost');
@@ -127,16 +159,12 @@ const server = http.createServer(async (req, res) => {
       
       if (!text) return json(res, { success: false, error: 'no text' });
       
-      // Use Hugging Face Inference API (free)
       const hfUrl = 'https://api-inference.huggingface.co/models/facebook/bart-large-cnn';
       const prompt = `Correct this English text: ${text}`;
       
       const hfBody = JSON.stringify({
         inputs: prompt,
-        parameters: {
-          max_length: 200,
-          min_length: 10
-        }
+        parameters: { max_length: 200, min_length: 10 }
       });
 
       console.log('[correctEnglish] Calling Hugging Face API...');
@@ -146,9 +174,7 @@ const server = http.createServer(async (req, res) => {
         hostname: url.hostname,
         path: url.pathname,
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        }
+        headers: { 'Content-Type': 'application/json' }
       };
 
       const hfReq = https.request(options, (hfRes) => {
@@ -160,7 +186,6 @@ const server = http.createServer(async (req, res) => {
             
             if (hfRes.statusCode !== 200) {
               console.error('[correctEnglish] HF API error:', hfRes.statusCode, data);
-              // Fallback to simple corrections
               let corrected = text
                 .replace(/\br\s+you\b/gi, 'are you')
                 .replace(/\bhow old a you\b/gi, 'how old are you')
@@ -176,8 +201,6 @@ const server = http.createServer(async (req, res) => {
             
             const result = JSON.parse(data);
             let correctedText = result[0]?.summary_text || result[0]?.generated_text || text;
-            
-            // Clean up the response
             correctedText = correctedText
               .replace(/^Correct this English text:\s*/i, '')
               .replace(/^["']|["']$/g, '')
@@ -186,7 +209,6 @@ const server = http.createServer(async (req, res) => {
             json(res, { success: true, correctedText: correctedText });
           } catch (e) {
             console.error('[correctEnglish] Parse error:', e.message);
-            // Fallback
             let corrected = text
               .replace(/\br\s+you\b/gi, 'are you')
               .replace(/\bhow old a you\b/gi, 'how old are you')
@@ -200,7 +222,6 @@ const server = http.createServer(async (req, res) => {
 
       hfReq.on('error', (e) => {
         console.error('[correctEnglish] Request error:', e.message);
-        // Fallback
         let corrected = text
           .replace(/\br\s+you\b/gi, 'are you')
           .replace(/\bhow old a you\b/gi, 'how old are you')
@@ -220,18 +241,28 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  const m = req.url.match(/^\/ttyd\/([^/]+)(\/.*)?$/);
+  const m = req.url.match(/^\/ttyd\/([^\/]+)(\/.*)?$/);
   if (m) {
     const nameOrPort = m[1];
     let port;
-    if (/^\d+$/.test(nameOrPort)) { port = nameOrPort; }
-    else {
-      const bot = getBotByName(nameOrPort);
+    let bot;
+    if (/^\d+$/.test(nameOrPort)) { 
+      port = nameOrPort;
+      bot = loadBots().find(b => String(b.ttyd_port) === String(port));
+    } else {
+      bot = getBotByName(nameOrPort);
       if (!bot || !bot.ttyd_port) { res.writeHead(404); return res.end('bot not found'); }
       port = bot.ttyd_port;
     }
     req.url = m[2] || '/';
     delete req.headers['authorization'];
+    
+    // Add ttyd Basic Auth
+    if (bot && bot.ttyd_token) {
+      const auth = 'Basic ' + Buffer.from('bot:' + bot.ttyd_token).toString('base64');
+      req.headers['authorization'] = auth;
+    }
+    
     return proxy.web(req, res, { target: 'http://127.0.0.1:' + port });
   }
 
@@ -248,11 +279,24 @@ server.on('upgrade', (req, socket, head) => {
   if (m) {
     const nameOrPort = m[1];
     let port;
-    if (/^\d+$/.test(nameOrPort)) { port = nameOrPort; }
-    else { const bot = getBotByName(nameOrPort); port = bot && bot.ttyd_port; }
+    let bot;
+    if (/^\d+$/.test(nameOrPort)) {
+      port = nameOrPort;
+      bot = loadBots().find(b => String(b.ttyd_port) === String(port));
+    } else {
+      bot = getBotByName(nameOrPort);
+      port = bot && bot.ttyd_port;
+    }
     if (!port) return socket.destroy();
     req.url = m[2] || '/';
     delete req.headers['authorization'];
+    
+    // Add ttyd Basic Auth for WebSocket
+    if (bot && bot.ttyd_token) {
+      const auth = 'Basic ' + Buffer.from('bot:' + bot.ttyd_token).toString('base64');
+      req.headers['authorization'] = auth;
+    }
+    
     proxy.ws(req, socket, head, { target: 'http://127.0.0.1:' + port });
   } else { socket.destroy(); }
 });
