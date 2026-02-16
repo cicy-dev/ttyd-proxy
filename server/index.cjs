@@ -7,6 +7,93 @@ const { execSync } = require('child_process');
 
 const PORT = parseInt(process.env.PORT || '14443');
 
+// === 认证配置 ===
+const AUTH_TOKEN = process.env.AUTH_TOKEN || 'pb200898';
+const BASIC_USER = process.env.BASIC_USER || 'admin';
+const BASIC_PASS = process.env.BASIC_PASS || 'pb200898';
+const BASIC_EXPECTED = 'Basic ' + Buffer.from(`${BASIC_USER}:${BASIC_PASS}`).toString('base64');
+// cookie 签名用的 key（简单 HMAC）
+const crypto = require('crypto');
+const COOKIE_SECRET = crypto.createHash('sha256').update(AUTH_TOKEN + 'ttyd-proxy').digest('hex').slice(0, 32);
+const COOKIE_NAME = 'ttyd_auth';
+
+function makeAuthCookie() {
+  const payload = Date.now().toString();
+  const sig = crypto.createHmac('sha256', COOKIE_SECRET).update(payload).digest('hex').slice(0, 16);
+  return `${payload}.${sig}`;
+}
+
+function verifyAuthCookie(val) {
+  if (!val) return false;
+  const [payload, sig] = val.split('.');
+  if (!payload || !sig) return false;
+  // cookie 有效期 7 天
+  if (Date.now() - parseInt(payload) > 7 * 86400000) return false;
+  const expected = crypto.createHmac('sha256', COOKIE_SECRET).update(payload).digest('hex').slice(0, 16);
+  return sig === expected;
+}
+
+function parseCookies(req) {
+  const obj = {};
+  (req.headers.cookie || '').split(';').forEach(c => {
+    const [k, ...v] = c.trim().split('=');
+    if (k) obj[k] = v.join('=');
+  });
+  return obj;
+}
+
+// 认证检查：token 参数 / Basic Auth / cookie 通过即可
+function checkAuth(req, res) {
+  // 1. cookie
+  const cookies = parseCookies(req);
+  if (verifyAuthCookie(cookies[COOKIE_NAME])) return true;
+  // 2. URL token 参数（TG Mini WebView 用）— 通过后种 cookie
+  const url = new URL(req.url, 'http://localhost');
+  if (url.searchParams.get('token') === AUTH_TOKEN) {
+    if (res && res.writeHead) {
+      // 种 cookie 后 redirect 去掉 token 参数（避免泄露）
+      url.searchParams.delete('token');
+      const clean = url.pathname + (url.search || '');
+      res.writeHead(302, {
+        'Set-Cookie': `${COOKIE_NAME}=${makeAuthCookie()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${7 * 86400}`,
+        'Location': clean,
+      });
+      res.end();
+      return 'redirected';
+    }
+    return true;
+  }
+  // 3. HTTP Basic Auth（浏览器用）— 通过后也种 cookie
+  const auth = req.headers['authorization'];
+  if (auth === BASIC_EXPECTED) {
+    // 种 cookie 让 iframe/WS 后续请求也能通过
+    if (res && res.writeHead) {
+      res._authCookie = `${COOKIE_NAME}=${makeAuthCookie()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${7 * 86400}`;
+    }
+    return true;
+  }
+  return false;
+}
+
+// WS 认证（只检查 cookie 和 Basic Auth，不能 redirect）
+function checkAuthWs(req) {
+  const cookies = parseCookies(req);
+  if (verifyAuthCookie(cookies[COOKIE_NAME])) return true;
+  const url = new URL(req.url, 'http://localhost');
+  if (url.searchParams.get('token') === AUTH_TOKEN) return true;
+  const auth = req.headers['authorization'];
+  if (auth === BASIC_EXPECTED) return true;
+  return false;
+}
+
+function sendUnauthorized(res) {
+  res.writeHead(401, {
+    'WWW-Authenticate': 'Basic realm="ttyd-proxy"',
+    'Content-Type': 'text/plain',
+  });
+  res.end('Unauthorized');
+}
+
 // 动态 ttyd 映射：从 ps 解析 ttyd 进程获取 port + token
 let ttydCache = {};
 let ttydCacheTime = 0;
@@ -100,8 +187,23 @@ function json(res, data) {
 }
 
 const server = http.createServer((req, res) => {
-  // API
+  // health 不需要认证
   if (req.url === '/api/health') return json(res, { status: 'ok' });
+
+  // 所有其他请求需要认证
+  const authResult = checkAuth(req, res);
+  if (authResult === 'redirected') return; // token → cookie redirect 已处理
+  if (!authResult) return sendUnauthorized(res);
+
+  // Basic Auth 通过时种 cookie（让 iframe 后续请求也能通过）
+  const origWriteHead = res.writeHead.bind(res);
+  if (res._authCookie) {
+    res.writeHead = (status, headers) => {
+      headers = headers || {};
+      headers['Set-Cookie'] = res._authCookie;
+      return origWriteHead(status, headers);
+    };
+  }
 
   // tmux send-keys（支持 target 或 bot_name）
   if (req.url === '/api/tmux' && req.method === 'POST') {
@@ -153,6 +255,13 @@ const server = http.createServer((req, res) => {
 
 // WebSocket upgrade
 server.on('upgrade', (req, socket, head) => {
+  // WebSocket 也需要认证
+  if (!checkAuthWs(req)) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+
   // ttyd WebSocket
   if (req.url.startsWith('/ttyd/')) {
     const parts = req.url.match(/^\/ttyd\/([^/]+)(\/.*)?$/);
