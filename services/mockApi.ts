@@ -1,47 +1,35 @@
 import { SystemEvent } from '../types';
 
-// 获取 token
 const getToken = () => localStorage.getItem('token') || '';
 const authHeaders = () => ({ 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() });
 
-export const sendCommandToVnc = async (command: string, profileType?: string, tmuxTarget?: string, display?: string): Promise<{ success: boolean; message: string }> => {
-  console.log('[sendCommand]', { profileType, tmuxTarget, command, display });
-  
-  // ttyd 模式：tmux send-keys
-  if (profileType === 'ttyd' && tmuxTarget) {
-    const res = await fetch('/api/tmux', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ text: command, target: tmuxTarget }),
-    });
-    const data = await res.json();
-    return { success: data.success, message: data.success ? 'Sent to tmux' : data.error };
-  }
-
-  // VNC 模式：xdotool type
-  const res = await fetch('/api/type', {
+// 发送命令到 tmux
+export const sendCommandToTmux = async (command: string, tmuxTarget: string): Promise<{ success: boolean; message: string }> => {
+  const res = await fetch('/api/tmux', {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ text: command, display: display || ':1' }),
+    body: JSON.stringify({ text: command, target: tmuxTarget }),
   });
   const data = await res.json();
-  return { success: data.success, message: data.success ? 'Typed to VNC' : data.error };
+  return { success: data.success, message: data.success ? 'Sent to tmux' : data.error };
 };
 
-export const sendSystemEvent = async (event: SystemEvent, display?: string): Promise<void> => {
+// 转发键盘事件
+export const sendSystemEvent = async (event: SystemEvent): Promise<void> => {
   if (event.type === 'keydown') {
     await fetch('/api/key', {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ key: event.code, display: display || ':1' }),
+      body: JSON.stringify({ key: event.code }),
     }).catch(() => {});
   }
 };
 
-export const sendShortcut = async (key: string, display?: string): Promise<void> => {
+// 转发快捷键
+export const sendShortcut = async (key: string): Promise<void> => {
   await fetch('/api/key', {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ key, display: display || ':1' }),
+    body: JSON.stringify({ key }),
   }).catch(() => {});
 };

@@ -8,20 +8,9 @@ export interface Size {
   height: number;
 }
 
-export interface VncProfile {
-  id: string;
-  name: string;
-  url: string;
-  type?: 'vnc' | 'ttyd';       // 默认 vnc
-  tmuxTarget?: string;           // ttyd 类型时，tmux send-keys 的目标，如 "master:cicy_master_xk_bot.0"
-  display?: string;              // VNC display，如 ":1" ":2"，默认 ":1"
-}
-
 export interface AppSettings {
   panelPosition: Position;
   panelSize: Size;
-  profiles: VncProfile[];
-  activeProfileId: string | null;
   forwardEvents: boolean;
   lastDraft?: string;
   showPrompt: boolean;
@@ -37,11 +26,4 @@ export interface SystemEvent {
   shiftKey: boolean;
   altKey: boolean;
   metaKey: boolean;
-}
-
-export interface CommandLog {
-  id: string;
-  text: string;
-  timestamp: Date;
-  status: 'sending' | 'sent' | 'error';
 }
