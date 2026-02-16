@@ -121,6 +121,13 @@ const WebTerminalApp: React.FC = () => {
     });
   };
 
+  const handleRemoveAllPanes = () => {
+    if (panes.length > 1) {
+      setPanes([panes[0]]);
+      setLayoutMode('single');
+    }
+  };
+
   const renderTerminal = (pane: TerminalPane, showControls: boolean = true) => (
     <div key={pane.id} className="relative w-full h-full bg-black group">
       <TtydFrame
@@ -128,25 +135,24 @@ const WebTerminalApp: React.FC = () => {
         isInteractingWithOverlay={isInteracting}
       />
       
-      {/* Terminal Header */}
-      {showControls && (
-        <div className="absolute top-0 left-0 right-0 h-10 bg-gradient-to-b from-black/80 to-transparent flex items-center justify-between px-3 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-          <div className="flex items-center gap-2">
-            <Terminal size={14} className="text-blue-400" />
-            <span className="text-xs text-white font-medium">{pane.title}</span>
-            <span className="text-xs text-gray-500">({pane.botName})</span>
-          </div>
-          
-          {panes.length > 1 && (
-            <button
-              onClick={() => handleRemovePane(pane.id)}
-              className="p-1 bg-red-600/80 hover:bg-red-500 text-white rounded transition-colors"
-            >
-              <X size={14} />
-            </button>
-          )}
+      {/* Terminal Header - Always show on hover */}
+      <div className="absolute top-0 left-0 right-0 h-10 bg-gradient-to-b from-black/80 to-transparent flex items-center justify-between px-3 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+        <div className="flex items-center gap-2">
+          <Terminal size={14} className="text-blue-400" />
+          <span className="text-xs text-white font-medium">{pane.title}</span>
+          <span className="text-xs text-gray-500">({pane.botName})</span>
         </div>
-      )}
+        
+        {/* Always show close button if more than 1 pane */}
+        {panes.length > 1 && (
+          <button
+            onClick={() => handleRemovePane(pane.id)}
+            className="p-1 bg-red-600/80 hover:bg-red-500 text-white rounded transition-colors"
+          >
+            <X size={14} />
+          </button>
+        )}
+      </div>
     </div>
   );
 
@@ -290,7 +296,18 @@ const WebTerminalApp: React.FC = () => {
 
         {/* Layout Selector */}
         <div className="px-4 py-3 border-b border-gray-800 flex-shrink-0">
-          <div className="text-xs text-gray-500 mb-2 uppercase tracking-wide">Layout</div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs text-gray-500 uppercase tracking-wide">Layout</div>
+            {panes.length > 1 && (
+              <button
+                onClick={handleRemoveAllPanes}
+                className="text-xs px-2 py-1 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded transition-colors"
+                title="Close all terminals except first"
+              >
+                Reset
+              </button>
+            )}
+          </div>
           <div className="grid grid-cols-3 gap-2">
             <button
               onClick={() => setLayoutMode('single')}
@@ -373,8 +390,19 @@ const WebTerminalApp: React.FC = () => {
 
         {/* Terminal List */}
         <div className="flex-1 overflow-y-auto px-4 py-3">
-          <div className="text-xs text-gray-500 mb-2 uppercase tracking-wide">
-            Terminals ({panes.length})
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs text-gray-500 uppercase tracking-wide">
+              Terminals ({panes.length})
+            </div>
+            {panes.length > 1 && (
+              <button
+                onClick={handleRemoveAllPanes}
+                className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                title="Close all except first"
+              >
+                Close All
+              </button>
+            )}
           </div>
           <div className="space-y-2">
             {panes.map((pane, idx) => (
@@ -456,6 +484,21 @@ const WebTerminalApp: React.FC = () => {
       {/* Main Content */}
       <div className="flex-1 relative">
         {renderLayout()}
+
+        {/* Quick Actions */}
+        <div className="absolute top-4 right-4 z-30 flex gap-2">
+          {/* Reset to Single Terminal */}
+          {panes.length > 1 && (
+            <button
+              onClick={handleRemoveAllPanes}
+              className="p-2 bg-red-600/90 hover:bg-red-500 border border-red-500 text-white rounded-lg transition-all shadow-lg backdrop-blur-sm flex items-center gap-2"
+              title="Close all terminals except first"
+            >
+              <X size={18} />
+              <span className="text-sm font-medium hidden sm:inline">Close All</span>
+            </button>
+          )}
+        </div>
 
         {/* Toggle Sidebar Button */}
         {!showSidebar && (
