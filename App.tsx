@@ -1,122 +1,322 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Send, Mic, Terminal, Keyboard } from 'lucide-react';
+import { Send, Settings, Wifi, WifiOff, X, Plus, Trash2, Edit2, Keyboard, Check, Mic, MicOff, Terminal, MessageSquare, Maximize, Loader2, CheckCircle, History, Menu, Sparkles } from 'lucide-react';
 import { TtydFrame } from './components/TtydFrame';
 import { FloatingPanel } from './components/FloatingPanel';
 import { VoiceFloatingButton } from './components/VoiceFloatingButton';
+import { LoginForm } from './components/LoginForm';
 import { sendCommandToTmux, sendSystemEvent, sendShortcut } from './services/mockApi';
 import { AppSettings, Position, Size } from './types';
 
 // 从 URL query 获取参数
 const BOT_NAME = new URLSearchParams(window.location.search).get('bot_name') || 'cicy_master_xk_bot';
 const TMUX_TARGET = `master:${BOT_NAME}.0`;
-const IFRAME_URL = `/ttyd/${BOT_NAME}/`;
 
 const DEFAULT_SETTINGS: AppSettings = {
   panelPosition: { x: 20, y: 20 },
-  panelSize: { width: 450, height: 188 },
+  panelSize: { width: 450, height: 120 },
   forwardEvents: false,
   lastDraft: '',
   showPrompt: true,
   showVoiceControl: false,
-  voiceButtonPosition: { x: 40, y: 200 }
+  voiceButtonPosition: { x: 40, y: 200 },
+  commandHistory: []
 };
 
-const STORAGE_KEY = 'vnc_app_settings_v8';
+const STORAGE_KEY = 'ttyd_app_settings_v1';
+
+// Speech Recognition Type Definition
+declare global {
+  interface Window {
+    webkitSpeechRecognition: any;
+    SpeechRecognition: any;
+  }
+}
 
 const App: React.FC = () => {
+  // --- State Management ---
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [token, setToken] = useState<string | null>(null);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  
+  // UI State
   const [isInteracting, setIsInteracting] = useState(false);
   const [promptText, setPromptText] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [sendSuccess, setSendSuccess] = useState(false);
+  const [correctedText, setCorrectedText] = useState('');
+  const [isCorrectingEnglish, setIsCorrectingEnglish] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  
+  // Network Status
+  const [networkLatency, setNetworkLatency] = useState<number | null>(null);
+  const [networkStatus, setNetworkStatus] = useState<'excellent' | 'good' | 'poor' | 'offline'>('good');
+  
+  // Command History
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [tempDraft, setTempDraft] = useState('');
+  
+  // Voice State
   const [isListening, setIsListening] = useState(false);
   const voiceModeRef = useRef<'append' | 'direct'>('append');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // iframe URL
+  const iframeUrl = `/ttyd/${BOT_NAME}/?token=${token || ''}`;
+
   // --- Initialization & Persistence ---
+  
   useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        setSettings({ ...DEFAULT_SETTINGS, ...parsed });
-        if (parsed.lastDraft) setPromptText(parsed.lastDraft);
-      } catch (e) {
-        console.error("Failed to parse settings", e);
+    const init = async () => {
+      // Check for token first
+      const savedToken = localStorage.getItem('token');
+      if (savedToken) {
+        // Verify token is still valid
+        try {
+          const res = await fetch('/api/tmux', {
+            method: 'POST',
+            headers: { 
+              'Authorization': `Bearer ${savedToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ text: '', target: TMUX_TARGET })
+          });
+          if (res.ok || res.status === 200) {
+            setToken(savedToken);
+          } else {
+            localStorage.removeItem('token');
+          }
+        } catch (e) {
+          console.error('Token verification failed', e);
+          localStorage.removeItem('token');
+        }
       }
-    }
-    setIsLoaded(true);
+      setIsCheckingAuth(false);
+
+      // Load settings
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (!parsed.commandHistory) {
+            parsed.commandHistory = [];
+          }
+          setSettings({ ...DEFAULT_SETTINGS, ...parsed });
+          if (parsed.lastDraft) setPromptText(parsed.lastDraft);
+        } catch (e) {
+          console.error("Failed to parse settings", e);
+        }
+      }
+      setIsLoaded(true);
+    };
+    init();
   }, []);
 
   useEffect(() => {
-    if (isLoaded) localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    if (isLoaded) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    }
   }, [settings, isLoaded]);
 
   // Auto-save draft
   useEffect(() => {
     if (!isLoaded) return;
     const timeoutId = setTimeout(() => {
-      setSettings(prev => {
-        if (prev.lastDraft === promptText) return prev;
-        return { ...prev, lastDraft: promptText };
-      });
+        setSettings(prev => {
+            if (prev.lastDraft === promptText) return prev;
+            return { ...prev, lastDraft: promptText };
+        });
     }, 500);
     return () => clearTimeout(timeoutId);
   }, [promptText, isLoaded]);
 
+  // Network Health Check
+  useEffect(() => {
+    const checkHealth = async () => {
+      const startTime = performance.now();
+      try {
+        const response = await fetch('/api/health', {
+          method: 'GET',
+          cache: 'no-cache'
+        });
+        const endTime = performance.now();
+        const latency = Math.round(endTime - startTime);
+        
+        if (response.ok) {
+          setNetworkLatency(latency);
+          if (latency < 100) {
+            setNetworkStatus('excellent');
+          } else if (latency < 300) {
+            setNetworkStatus('good');
+          } else {
+            setNetworkStatus('poor');
+          }
+        } else {
+          setNetworkStatus('offline');
+          setNetworkLatency(null);
+        }
+      } catch (error) {
+        setNetworkStatus('offline');
+        setNetworkLatency(null);
+      }
+    };
+
+    checkHealth();
+    const interval = setInterval(checkHealth, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleLogin = (newToken: string) => {
+    setToken(newToken);
+  };
+
   // --- Voice Input Logic ---
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
+
+  const recognitionRef = useRef<any>(null);
+  const interimTranscriptRef = useRef<string>('');
 
   const handleVoiceResult = useCallback(async (text: string) => {
     if (voiceModeRef.current === 'append') {
-      setPromptText(prev => {
-        const prefix = prev.trim() ? prev.trim() + ' ' : '';
-        return prefix + text;
-      });
+        setPromptText(prev => {
+            const prefix = prev.trim() ? prev.trim() + ' ' : '';
+            return prefix + text;
+        });
     } else if (voiceModeRef.current === 'direct') {
-      if (text.trim()) {
-        setIsSending(true);
-        try { await sendCommandToTmux(text, TMUX_TARGET); }
-        catch (error) { console.error("Voice command failed", error); }
-        finally { setIsSending(false); }
-      }
+        if (text.trim()) {
+            setIsSending(true);
+            setSendSuccess(false);
+            try {
+                await sendCommandToTmux(text, TMUX_TARGET);
+                setSendSuccess(true);
+                setTimeout(() => setSendSuccess(false), 2000);
+            } catch (error) {
+                console.error("Voice command failed", error);
+            } finally {
+                setIsSending(false);
+            }
+        }
     }
   }, []);
 
   const startVoiceRecording = async (mode: 'append' | 'direct') => {
     voiceModeRef.current = mode;
+    
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      console.error('Speech recognition not supported in this browser');
+      alert('Speech recognition is not supported in your browser. Please use Chrome, Edge, or Safari.');
+      return;
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-      audioChunksRef.current = [];
-      recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
-      recorder.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
-        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        if (blob.size < 1000) return;
-        setIsListening(false);
-        try {
-          const res = await fetch('/api/voice', { method: 'POST', body: blob, headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('token') || '') } });
-          const data = await res.json();
-          if (data.text) handleVoiceResult(data.text);
-        } catch (e) { console.error('Voice upload failed', e); }
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'zh-CN';
+
+      recognition.onstart = () => {
+        setIsListening(true);
+        interimTranscriptRef.current = '';
+        console.log('Voice recognition started');
       };
-      mediaRecorderRef.current = recorder;
-      recorder.start();
-      setIsListening(true);
-    } catch (e) { console.error('Mic access failed', e); }
+
+      recognition.onresult = (event: any) => {
+        let interimTranscript = '';
+        let finalTranscript = '';
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript + ' ';
+          } else {
+            interimTranscript += transcript;
+          }
+        }
+
+        interimTranscriptRef.current = interimTranscript;
+
+        if (finalTranscript) {
+          handleVoiceResult(finalTranscript.trim());
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error('Speech recognition error:', event.error);
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+        console.log('Voice recognition ended');
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (e) {
+      console.error('Failed to start speech recognition:', e);
+      setIsListening(false);
+    }
   };
 
   const stopVoiceRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') mediaRecorderRef.current.stop();
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+  };
+
+  // --- English Correction Logic ---
+  const handleCorrectEnglish = async () => {
+    if (!promptText.trim() || isCorrectingEnglish) return;
+    
+    setIsCorrectingEnglish(true);
+    setCorrectedText('');
+    
+    try {
+      const response = await fetch('/api/correctEnglish', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ text: promptText })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success && data.correctedText) {
+        setCorrectedText(data.correctedText);
+      } else {
+        console.error('English correction failed:', data.error);
+        alert('Failed to correct English: ' + (data.error || 'Unknown error'));
+      }
+    } catch (error) {
+      console.error('English correction error:', error);
+      alert('Failed to correct English. Please check your connection.');
+    } finally {
+      setIsCorrectingEnglish(false);
+    }
+  };
+
+  const handleAcceptCorrection = () => {
+    if (correctedText) {
+      setPromptText(correctedText);
+      setCorrectedText('');
+      setTimeout(() => textareaRef.current?.focus(), 50);
+    }
+  };
+
+  const handleDismissCorrection = () => {
+    setCorrectedText('');
   };
 
   // --- Event Forwarding ---
+
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (!settings.forwardEvents) return;
     const target = e.target as HTMLElement;
     if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+
     const mod = e.ctrlKey || e.metaKey;
     if (mod && ['c', 'v', 'a', 'z'].includes(e.key.toLowerCase())) {
       e.preventDefault();
@@ -124,7 +324,16 @@ const App: React.FC = () => {
       sendShortcut(`ctrl+${e.key.toLowerCase()}`);
       return;
     }
-    sendSystemEvent({ type: 'keydown', key: e.key, code: e.code, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey, metaKey: e.metaKey });
+
+    sendSystemEvent({
+      type: 'keydown',
+      key: e.key,
+      code: e.code,
+      ctrlKey: e.ctrlKey,
+      shiftKey: e.shiftKey,
+      altKey: e.altKey,
+      metaKey: e.metaKey
+    });
   }, [settings.forwardEvents]);
 
   useEffect(() => {
@@ -133,19 +342,70 @@ const App: React.FC = () => {
   }, [handleKeyDown]);
 
   // --- Actions ---
+
+  const handleSelectHistory = (command: string) => {
+    setPromptText(command);
+    setShowHistory(false);
+    setHistoryIndex(-1);
+    setTempDraft(command);
+    setTimeout(() => textareaRef.current?.focus(), 50);
+  };
+
+  const handleDeleteHistory = (e: React.MouseEvent, index: number) => {
+    e.stopPropagation();
+    setSettings(prev => ({
+      ...prev,
+      commandHistory: prev.commandHistory.filter((_, idx) => idx !== index)
+    }));
+  };
+
+  const handleClearAllHistory = () => {
+    setSettings(prev => ({
+      ...prev,
+      commandHistory: []
+    }));
+  };
+
   const handleSendPrompt = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!promptText.trim()) return;
+
     const command = promptText;
-    setPromptText('');
+    
+    setSettings(prev => {
+      const currentHistory = prev.commandHistory || [];
+      const newHistory = [command, ...currentHistory.filter(cmd => cmd !== command)].slice(0, 50);
+      return { ...prev, commandHistory: newHistory };
+    });
+    setHistoryIndex(-1);
+    setTempDraft('');
+    
+    setPromptText(''); 
     setIsSending(true);
-    try { await sendCommandToTmux(command, TMUX_TARGET); }
-    catch (error) { console.error("Failed to send command", error); }
-    finally { setIsSending(false); setTimeout(() => textareaRef.current?.focus(), 50); }
+    setSendSuccess(false);
+
+    try {
+      await sendCommandToTmux(command, TMUX_TARGET);
+      setSendSuccess(true);
+      setTimeout(() => setSendSuccess(false), 2000);
+    } catch (error) {
+      console.error("Failed to send command", error);
+    } finally {
+      setIsSending(false);
+      setTimeout(() => textareaRef.current?.focus(), 50);
+    }
   };
 
   const handlePanelChange = (pos: Position, size: Size) => {
-    setSettings(prev => ({ ...prev, panelPosition: pos, panelSize: size }));
+    setSettings(prev => ({
+      ...prev,
+      panelPosition: pos,
+      panelSize: size
+    }));
+  };
+
+  const handleVoiceButtonPosChange = (pos: Position) => {
+    setSettings(prev => ({ ...prev, voiceButtonPosition: pos }));
   };
 
   const toggleEventForwarding = () => {
@@ -153,71 +413,320 @@ const App: React.FC = () => {
   };
 
   const toggleVoiceMode = () => {
-    setSettings(prev => ({ ...prev, showVoiceControl: !prev.showVoiceControl, showPrompt: prev.showVoiceControl }));
+      setSettings(prev => {
+          const newVoiceState = !prev.showVoiceControl;
+          return {
+              ...prev,
+              showVoiceControl: newVoiceState,
+              showPrompt: !newVoiceState
+          };
+      });
   };
+
+  // Show loading screen while checking auth
+  if (isCheckingAuth) {
+    return <div className="bg-black w-screen h-screen flex items-center justify-center">
+      <Loader2 size={48} className="text-blue-500 animate-spin" />
+    </div>;
+  }
+
+  // Show login form if not authenticated
+  if (!token) {
+    return <LoginForm onLogin={handleLogin} />;
+  }
 
   if (!isLoaded) return <div className="bg-black w-screen h-screen"></div>;
 
   return (
     <div className="relative w-screen h-screen bg-black overflow-hidden font-sans">
-      <TtydFrame url={IFRAME_URL} isInteractingWithOverlay={isInteracting} />
+      {/* Full Screen Iframe */}
+      <div className="absolute inset-0">
+        <TtydFrame url={iframeUrl} isInteractingWithOverlay={isInteracting} />
+      </div>
 
+      {/* Minimized Toggle Button */}
       {!settings.showPrompt && (
         <div className="absolute top-4 right-4 z-40 flex gap-2">
-          <button onClick={toggleVoiceMode}
-            className={`flex items-center gap-2 px-4 py-2 rounded-full shadow-lg transition-all ${settings.showVoiceControl ? 'bg-red-600 text-white animate-pulse' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}>
-            <Mic size={18} /><span className="font-medium hidden md:inline">Voice</span>
-          </button>
-          <button onClick={() => setSettings(prev => ({ ...prev, showPrompt: true, showVoiceControl: false }))}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-full shadow-lg transition-all">
-            <Terminal size={18} /><span className="font-medium">Prompt</span>
-          </button>
+           <button
+                onClick={toggleVoiceMode}
+                className={`flex items-center gap-2 px-4 py-2 rounded-full shadow-lg transition-all ${
+                    settings.showVoiceControl ? 'bg-red-600 text-white animate-pulse' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                }`}
+            >
+                <Mic size={18} />
+                <span className="font-medium hidden md:inline">Voice</span>
+           </button>
+
+           <button
+                onClick={() => setSettings(prev => ({ ...prev, showPrompt: true, showVoiceControl: false }))}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-full shadow-lg transition-all"
+            >
+                <Terminal size={18} />
+                <span className="font-medium">Prompt</span>
+            </button>
         </div>
       )}
 
+      {/* Floating Prompt Controller */}
       {settings.showPrompt && (
-        <FloatingPanel
-          title={`${BOT_NAME} 🖥`}
-          initialPosition={settings.panelPosition}
-          initialSize={settings.panelSize}
-          minSize={{ width: 340, height: 180 }}
-          onInteractionStart={() => setIsInteracting(true)}
-          onInteractionEnd={() => setIsInteracting(false)}
-          onChange={handlePanelChange}
-          onClose={() => setSettings(prev => ({ ...prev, showPrompt: false }))}
-          headerActions={<>
-            <button onClick={toggleVoiceMode}
-              className={`p-2 rounded-lg transition-all ${settings.showVoiceControl ? 'bg-red-600 text-white' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}
-              title="Voice Mode"><Mic size={18} /></button>
-            <button onClick={toggleEventForwarding}
-              className={`p-2 rounded-lg transition-all ${settings.forwardEvents ? 'bg-green-600 text-white' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}
-              title={settings.forwardEvents ? "Event Forwarding Active" : "Enable Event Forwarding"}><Keyboard size={18} /></button>
-          </>}
-        >
-          <form onSubmit={handleSendPrompt} className="relative h-full flex flex-col p-4">
-            <textarea ref={textareaRef} value={promptText}
-              onChange={(e) => setPromptText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); handleSendPrompt(); } }}
-              placeholder="Type a command to send..."
-              className="flex-1 w-full bg-black/50 text-white rounded-lg border border-gray-700 p-3 pr-16 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none resize-none text-base shadow-inner"
-              disabled={isSending} />
-            <div className="absolute bottom-6 right-6">
-              <button type="submit" disabled={!promptText.trim() || isSending}
-                className="p-2 bg-blue-600 hover:bg-blue-500 text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg">
-                <Send size={16} /></button>
-            </div>
-          </form>
-        </FloatingPanel>
+          <FloatingPanel
+            title={`Terminal: ${BOT_NAME}`}
+            initialPosition={settings.panelPosition}
+            initialSize={settings.panelSize}
+            minSize={{ width: 340, height: 120 }}
+            onInteractionStart={() => setIsInteracting(true)}
+            onInteractionEnd={() => setIsInteracting(false)}
+            onChange={handlePanelChange}
+            onClose={() => setSettings(prev => ({ ...prev, showPrompt: false }))}
+            headerActions={
+                <>
+                    {/* Network Status Indicator */}
+                    <div 
+                        className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gray-800/50"
+                        title={networkLatency !== null ? `Latency: ${networkLatency}ms` : 'Offline'}
+                    >
+                        {networkStatus === 'excellent' && (
+                            <Wifi size={16} className="text-green-400" />
+                        )}
+                        {networkStatus === 'good' && (
+                            <Wifi size={16} className="text-yellow-400" />
+                        )}
+                        {networkStatus === 'poor' && (
+                            <Wifi size={16} className="text-orange-400" />
+                        )}
+                        {networkStatus === 'offline' && (
+                            <WifiOff size={16} className="text-red-400" />
+                        )}
+                        <span className="text-xs text-gray-400 font-mono">
+                            {networkLatency !== null ? `${networkLatency}ms` : 'offline'}
+                        </span>
+                    </div>
+
+                    {/* History Button */}
+                    <button
+                        onClick={() => setShowHistory(!showHistory)}
+                        className={`p-2 rounded-lg transition-all ${
+                            showHistory
+                                ? 'bg-blue-600 text-white'
+                                : 'text-gray-400 hover:bg-gray-700 hover:text-white'
+                        }`}
+                        title="Command History"
+                    >
+                        <History size={18} />
+                    </button>
+
+                    {/* Toggle Voice Control */}
+                    <button
+                        onClick={toggleVoiceMode}
+                        className={`p-2 rounded-lg transition-all ${
+                            settings.showVoiceControl
+                                ? 'bg-red-600 text-white'
+                                : 'text-gray-400 hover:bg-gray-700 hover:text-white'
+                        }`}
+                        title="Switch to Voice Mode"
+                    >
+                        <Mic size={18} />
+                    </button>
+
+                    {/* Event Forwarding Toggle */}
+                    <button 
+                        onClick={toggleEventForwarding}
+                        className={`p-2 rounded-lg transition-all flex items-center gap-2 ${
+                            settings.forwardEvents 
+                            ? 'bg-green-600 text-white' 
+                            : 'text-gray-400 hover:bg-gray-700 hover:text-white'
+                        }`}
+                        title={settings.forwardEvents ? "Event Forwarding Active" : "Enable Event Forwarding"}
+                    >
+                        <Keyboard size={18} />
+                    </button>
+                </>
+            }
+          >
+            <form onSubmit={handleSendPrompt} className="relative h-full flex flex-col p-2">
+              <div className="flex-1 flex flex-col min-h-0">
+                <div className="relative">
+                  <textarea
+                    ref={textareaRef}
+                    value={promptText}
+                    onChange={(e) => {
+                      setPromptText(e.target.value);
+                      if (historyIndex === -1) {
+                        setTempDraft(e.target.value);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                        e.preventDefault();
+                        handleSendPrompt();
+                      }
+                      else if (e.key === 'ArrowUp') {
+                        const textarea = e.currentTarget;
+                        const cursorPos = textarea.selectionStart;
+                        const textBeforeCursor = textarea.value.substring(0, cursorPos);
+                        const isOnFirstLine = !textBeforeCursor.includes('\n');
+                        
+                        if (isOnFirstLine) {
+                          e.preventDefault();
+                          const history = settings.commandHistory || [];
+                          if (history.length > 0) {
+                            if (historyIndex === -1) {
+                              setTempDraft(promptText);
+                              setHistoryIndex(0);
+                              setPromptText(history[0]);
+                            } else if (historyIndex < history.length - 1) {
+                              const newIndex = historyIndex + 1;
+                              setHistoryIndex(newIndex);
+                              setPromptText(history[newIndex]);
+                            }
+                          }
+                        }
+                      }
+                      else if (e.key === 'ArrowDown') {
+                        const textarea = e.currentTarget;
+                        const cursorPos = textarea.selectionStart;
+                        const textAfterCursor = textarea.value.substring(cursorPos);
+                        const isOnLastLine = !textAfterCursor.includes('\n');
+                        
+                        if (isOnLastLine) {
+                          e.preventDefault();
+                          if (historyIndex > 0) {
+                            const newIndex = historyIndex - 1;
+                            setHistoryIndex(newIndex);
+                            setPromptText(settings.commandHistory[newIndex]);
+                          } else if (historyIndex === 0) {
+                            setHistoryIndex(-1);
+                            setPromptText(tempDraft);
+                          }
+                        }
+                      }
+                    }}
+                    rows={2}
+                    placeholder="Type command..."
+                    className="w-full bg-black/50 text-white rounded-lg border border-gray-700 p-2 pr-2 pb-10 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none resize-none text-sm shadow-inner placeholder:text-gray-600 placeholder:opacity-50"
+                    disabled={isSending}
+                  />
+                  
+                  {/* Button group at bottom-right corner */}
+                  <div className="absolute bottom-3 right-2 flex gap-1">
+                    {/* English Correction Button */}
+                    <button
+                        type="button"
+                        onClick={handleCorrectEnglish}
+                        disabled={!promptText.trim() || isCorrectingEnglish}
+                        className="p-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+                        title="Correct English with AI"
+                    >
+                        {isCorrectingEnglish ? (
+                            <Loader2 size={14} className="animate-spin" />
+                        ) : (
+                            <Sparkles size={14} />
+                        )}
+                    </button>
+                    
+                    {/* Send button */}
+                    <button
+                        type="submit"
+                        disabled={!promptText.trim() || isSending}
+                        className="p-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+                    >
+                        {isSending ? (
+                            <Loader2 size={14} className="animate-spin" />
+                        ) : sendSuccess ? (
+                            <CheckCircle size={14} className="text-green-400" />
+                        ) : (
+                            <Send size={14} />
+                        )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Corrected Text Display */}
+                {correctedText && (
+                  <div className="mt-2 p-3 bg-purple-900/30 border border-purple-700 rounded-lg">
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="flex items-center gap-2">
+                        <Sparkles size={14} className="text-purple-400 flex-shrink-0" />
+                        <span className="text-xs text-purple-300 font-medium">Corrected Text:</span>
+                      </div>
+                      <button
+                        onClick={handleDismissCorrection}
+                        className="text-gray-400 hover:text-white transition-colors"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                    <p className="text-sm text-white mb-3 whitespace-pre-wrap">{correctedText}</p>
+                    <button
+                      onClick={handleAcceptCorrection}
+                      className="w-full px-3 py-2 bg-purple-600 hover:bg-purple-500 text-white text-sm rounded-md transition-colors flex items-center justify-center gap-2"
+                    >
+                      <Check size={14} />
+                      Use This Text
+                    </button>
+                  </div>
+                )}
+
+                {/* History List View */}
+                {showHistory && (
+                  <div className="mt-2 flex-1 overflow-y-auto bg-black/30 rounded-lg border border-gray-700 flex flex-col">
+                    {settings.commandHistory && settings.commandHistory.length > 0 ? (
+                      <>
+                        <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 bg-gray-900/50">
+                          <span className="text-xs text-gray-400">Command History</span>
+                          <button
+                            onClick={handleClearAllHistory}
+                            className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                          >
+                            Clear All
+                          </button>
+                        </div>
+                        <div className="divide-y divide-gray-800 overflow-y-auto">
+                          {settings.commandHistory.map((cmd, idx) => (
+                            <div
+                              key={idx}
+                              onClick={() => handleSelectHistory(cmd)}
+                              className="px-3 py-2 hover:bg-gray-800 cursor-pointer text-gray-300 hover:text-white transition-colors group"
+                            >
+                              <div className="flex items-center gap-2">
+                                <History size={12} className="text-gray-500 flex-shrink-0" />
+                                <span className="truncate text-sm flex-1">{cmd}</span>
+                                <button
+                                  onClick={(e) => handleDeleteHistory(e, idx)}
+                                  className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 transition-opacity"
+                                >
+                                  <X size={14} />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="px-4 py-3 text-gray-500 text-center text-sm">
+                        No command history yet
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </form>
+          </FloatingPanel>
       )}
 
+      {/* Floating Voice Control Button */}
       {settings.showVoiceControl && (
-        <VoiceFloatingButton
-          initialPosition={settings.voiceButtonPosition}
-          onPositionChange={(pos) => setSettings(prev => ({ ...prev, voiceButtonPosition: pos }))}
-          onRecordStart={() => startVoiceRecording('direct')}
-          onRecordEnd={() => stopVoiceRecording()}
-          isRecordingExternal={isListening && voiceModeRef.current === 'direct'}
-        />
+          <VoiceFloatingButton
+            initialPosition={settings.voiceButtonPosition}
+            onPositionChange={handleVoiceButtonPosChange}
+            onRecordStart={() => startVoiceRecording('direct')}
+            onRecordEnd={(shouldSend) => {
+                stopVoiceRecording();
+            }}
+            isRecordingExternal={isListening && voiceModeRef.current === 'direct'}
+            isSending={isSending}
+            sendSuccess={sendSuccess}
+          />
       )}
     </div>
   );

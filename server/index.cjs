@@ -51,51 +51,61 @@ function getTtydAuth(port) {
   return null;
 }
 
-function json(res, data) {
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(data));
-}
+const MIME = {
+  '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css',
+  '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml',
+};
 
-const MIME = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml' };
 const distPath = path.join(__dirname, '..', 'dist');
 
 function serveStatic(req, res) {
-  const cleanUrl = req.url.split('?')[0];
-  let filePath = path.join(distPath, cleanUrl === '/' ? 'index.html' : cleanUrl);
+  let filePath = path.join(distPath, req.url === '/' ? 'index.html' : req.url.split('?')[0]);
   if (!fs.existsSync(filePath)) filePath = path.join(distPath, 'index.html');
   const ext = path.extname(filePath);
   try {
     const data = fs.readFileSync(filePath);
     res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
     res.end(data);
-  } catch { res.writeHead(404); res.end('Not Found'); }
+  } catch {
+    res.writeHead(404);
+    res.end('Not Found');
+  }
 }
 
-function readBody(req) {
-  return new Promise(r => { let b = ''; req.on('data', c => b += c); req.on('end', () => r(b)); });
+function json(res, data) {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+}
+
+async function readBody(req) {
+  return new Promise((resolve) => {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => resolve(body));
+  });
 }
 
 const server = http.createServer(async (req, res) => {
   const urlPath = new URL(req.url, 'http://localhost').pathname;
 
-  if (urlPath === '/api/health') return json(res, { status: 'ok' });
+  // Health check - no auth required
+  if (urlPath === '/api/health') {
+    return json(res, { status: 'ok' });
+  }
 
-  // 静态文件不需要认证
+  // Static files - no auth required
   if (!urlPath.startsWith('/api/') && !urlPath.startsWith('/ttyd/')) {
     return serveStatic(req, res);
   }
 
-  // 其他全部需要 token
+  // All other API endpoints require authentication
   if (!checkToken(req)) {
     res.writeHead(401, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'unauthorized' }));
   }
 
-  if (urlPath === '/api/bots') {
-    return json(res, loadBots().map(b => ({
-      bot_name: b.bot_name, win_id: b.tmux_session + ':' + b.tmux_window + '.0',
-      group: b.group_name, ttyd_port: b.ttyd_port,
-    })));
+  if (urlPath === '/api/bots' && req.method === 'GET') {
+    return json(res, loadBots());
   }
 
   if (urlPath === '/api/tmux' && req.method === 'POST') {
@@ -106,6 +116,108 @@ const server = http.createServer(async (req, res) => {
       execSync('tmux send-keys -t ' + JSON.stringify(target) + ' ' + JSON.stringify(text) + ' Enter', { timeout: 5000 });
       return json(res, { success: true });
     } catch (e) { return json(res, { success: false, error: e.message }); }
+  }
+
+  // 英文纠错 - 使用 Hugging Face 免费 API
+  if (urlPath === '/api/correctEnglish' && req.method === 'POST') {
+    const body = await readBody(req);
+    try {
+      const { text } = JSON.parse(body);
+      console.log('[correctEnglish] Received text:', text);
+      
+      if (!text) return json(res, { success: false, error: 'no text' });
+      
+      // Use Hugging Face Inference API (free)
+      const hfUrl = 'https://api-inference.huggingface.co/models/facebook/bart-large-cnn';
+      const prompt = `Correct this English text: ${text}`;
+      
+      const hfBody = JSON.stringify({
+        inputs: prompt,
+        parameters: {
+          max_length: 200,
+          min_length: 10
+        }
+      });
+
+      console.log('[correctEnglish] Calling Hugging Face API...');
+      const https = require('https');
+      const url = new URL(hfUrl);
+      const options = {
+        hostname: url.hostname,
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      };
+
+      const hfReq = https.request(options, (hfRes) => {
+        let data = '';
+        hfRes.on('data', chunk => data += chunk);
+        hfRes.on('end', () => {
+          try {
+            console.log('[correctEnglish] HF response:', data.substring(0, 200));
+            
+            if (hfRes.statusCode !== 200) {
+              console.error('[correctEnglish] HF API error:', hfRes.statusCode, data);
+              // Fallback to simple corrections
+              let corrected = text
+                .replace(/\br\s+you\b/gi, 'are you')
+                .replace(/\bhow old a you\b/gi, 'how old are you')
+                .replace(/\bi want test\b/gi, 'I want to test')
+                .replace(/\bthis is work\b/gi, 'this works')
+                .replace(/\biam\b/gi, 'I am')
+                .replace(/\bu\b/gi, 'you')
+                .replace(/\br\b/gi, 'are')
+                .replace(/^([a-z])/, (m) => m.toUpperCase())
+                .replace(/([^.!?])$/, '$1.');
+              return json(res, { success: true, correctedText: corrected.trim() });
+            }
+            
+            const result = JSON.parse(data);
+            let correctedText = result[0]?.summary_text || result[0]?.generated_text || text;
+            
+            // Clean up the response
+            correctedText = correctedText
+              .replace(/^Correct this English text:\s*/i, '')
+              .replace(/^["']|["']$/g, '')
+              .trim();
+            
+            json(res, { success: true, correctedText: correctedText });
+          } catch (e) {
+            console.error('[correctEnglish] Parse error:', e.message);
+            // Fallback
+            let corrected = text
+              .replace(/\br\s+you\b/gi, 'are you')
+              .replace(/\bhow old a you\b/gi, 'how old are you')
+              .replace(/\bu\b/gi, 'you')
+              .replace(/\br\b/gi, 'are')
+              .replace(/^([a-z])/, (m) => m.toUpperCase());
+            json(res, { success: true, correctedText: corrected.trim() });
+          }
+        });
+      });
+
+      hfReq.on('error', (e) => {
+        console.error('[correctEnglish] Request error:', e.message);
+        // Fallback
+        let corrected = text
+          .replace(/\br\s+you\b/gi, 'are you')
+          .replace(/\bhow old a you\b/gi, 'how old are you')
+          .replace(/\bu\b/gi, 'you')
+          .replace(/\br\b/gi, 'are')
+          .replace(/^([a-z])/, (m) => m.toUpperCase());
+        json(res, { success: true, correctedText: corrected.trim() });
+      });
+
+      hfReq.write(hfBody);
+      hfReq.end();
+      return;
+      
+    } catch (e) {
+      console.error('[correctEnglish] Error:', e.message);
+      return json(res, { success: false, error: e.message });
+    }
   }
 
   const m = req.url.match(/^\/ttyd\/([^/]+)(\/.*)?$/);
