@@ -7,17 +7,61 @@ const { execSync } = require('child_process');
 
 const PORT = parseInt(process.env.PORT || '14443');
 
-// ttyd bot → port + token 映射
-const TTYD_MAP = {
-  'cicy_master_xk_bot': { target: 'http://127.0.0.1:16000', token: 'C5MOi6qz8X4_PnP_qh0AmQ' },
-  'cicy_test_final_bot': { target: 'http://127.0.0.1:16001', token: 'suniOm4YnGNU7w6UeORL6w' },
-  'cicy_test_auto_bot': { target: 'http://127.0.0.1:16002', token: '4WoKhWGPd-F4_1bNWEvH8w' },
-};
+// 动态 ttyd 映射：从 ps 解析 ttyd 进程获取 port + token
+let ttydCache = {};
+let ttydCacheTime = 0;
+const CACHE_TTL = 30000; // 30秒缓存
+
+function refreshTtydMap() {
+  const now = Date.now();
+  if (now - ttydCacheTime < CACHE_TTL && Object.keys(ttydCache).length > 0) return ttydCache;
+  try {
+    // 读取每个 ttyd 进程的完整命令行
+    const pids = execSync("pgrep -f '^ttyd -p'", { encoding: 'utf8', timeout: 5000 }).trim().split('\n').filter(Boolean);
+    const map = {};
+    for (const pid of pids) {
+      try {
+        const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0');
+        // 解析参数: ttyd -p <port> -c bot:<token> ... -t <session>:<bot_name>.0
+        let port = null, token = null, botName = null;
+        for (let i = 0; i < cmdline.length; i++) {
+          if (cmdline[i] === '-p' && cmdline[i + 1]) port = cmdline[i + 1];
+          if (cmdline[i] === '-c' && cmdline[i + 1]) {
+            const m = cmdline[i + 1].match(/^bot:(.+)$/);
+            if (m) token = m[1];
+          }
+          if (cmdline[i] === '-t' && cmdline[i + 1]) {
+            // 格式: session:bot_name.0
+            const m = cmdline[i + 1].match(/:(.+)\.0$/);
+            if (m) botName = m[1];
+          }
+        }
+        if (port && token && botName) {
+          map[botName] = { target: `http://127.0.0.1:${port}`, token };
+        }
+      } catch {}
+    }
+    if (Object.keys(map).length > 0) {
+      ttydCache = map;
+      ttydCacheTime = now;
+      console.log(`[ttyd-map] 刷新: ${Object.keys(map).join(', ')}`);
+    }
+  } catch {
+    // pgrep 没找到进程，保留旧缓存
+  }
+  return ttydCache;
+}
 
 function getTtydAuth(botName) {
-  const bot = TTYD_MAP[botName];
+  const map = refreshTtydMap();
+  const bot = map[botName];
   if (!bot) return null;
   return 'Basic ' + Buffer.from('bot:' + bot.token).toString('base64');
+}
+
+function getTtydTarget(botName) {
+  const map = refreshTtydMap();
+  return map[botName] || null;
 }
 
 const proxy = httpProxy.createProxyServer({});
@@ -78,30 +122,22 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // bot 列表 API
+  // bot 列表 API — 从 ttyd 进程动态获取
   if (req.url === '/api/bots') {
-    try {
-      // 从 bots.conf 读取 bot 列表
-      const confPath = path.join(process.env.HOME || '/root', 'projects/tts-bot/bots.conf');
-      const lines = fs.readFileSync(confPath, 'utf8').trim().split('\n').filter(l => l && !l.startsWith('#'));
-      const bots = lines.map(line => {
-        const [bot_name, group] = line.split(',');
-        return { bot_name, group, win_id: `${group}:${bot_name}.0` };
-      });
-      return json(res, bots);
-    } catch (e) {
-      return json(res, []);
-    }
+    const map = refreshTtydMap();
+    const bots = Object.keys(map).map(bot_name => ({ bot_name }));
+    return json(res, bots);
   }
 
-  // ttyd 代理: /ttyd/<bot_name>/* → localhost:16000/16001/16002
+  // ttyd 代理: /ttyd/<bot_name>/* → 动态查找 ttyd 进程
   if (req.url.startsWith('/ttyd/')) {
     const parts = req.url.match(/^\/ttyd\/([^/]+)(\/.*)?$/);
-    if (parts && TTYD_MAP[parts[1]]) {
+    const bot = parts && getTtydTarget(parts[1]);
+    if (bot) {
       const auth = getTtydAuth(parts[1]);
       if (auth) req.headers['authorization'] = auth;
       req.url = parts[2] || '/';
-      return proxy.web(req, res, { target: TTYD_MAP[parts[1]].target });
+      return proxy.web(req, res, { target: bot.target });
     }
   }
 
@@ -114,11 +150,12 @@ server.on('upgrade', (req, socket, head) => {
   // ttyd WebSocket
   if (req.url.startsWith('/ttyd/')) {
     const parts = req.url.match(/^\/ttyd\/([^/]+)(\/.*)?$/);
-    if (parts && TTYD_MAP[parts[1]]) {
+    const bot = parts && getTtydTarget(parts[1]);
+    if (bot) {
       const auth = getTtydAuth(parts[1]);
       if (auth) req.headers['authorization'] = auth;
       req.url = parts[2] || '/';
-      return proxy.ws(req, socket, head, { target: TTYD_MAP[parts[1]].target });
+      return proxy.ws(req, socket, head, { target: bot.target });
     }
   } else {
     socket.destroy();
