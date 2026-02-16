@@ -1,18 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import App from './App';
 import TelegramWebView from './TelegramWebView';
+import WebTerminalApp from './WebTerminalApp';
 
-type Route = 'telegram' | 'terminal';
+type Route = 'telegram' | 'terminal' | 'web';
 
 export const Router: React.FC = () => {
   const [currentRoute, setCurrentRoute] = useState<Route>('telegram');
+  const [isTelegramMode, setIsTelegramMode] = useState(false);
 
   useEffect(() => {
+    // Check if token is in URL (Telegram mode)
+    const urlParams = new URLSearchParams(window.location.search);
+    const hasTokenParam = urlParams.has('token');
+    setIsTelegramMode(hasTokenParam);
+
     const handleHashChange = () => {
       const hash = window.location.hash.slice(1); // Remove #
       
       if (hash === 'terminal' || hash === 'split') {
         setCurrentRoute('terminal');
+      } else if (hash === 'web') {
+        setCurrentRoute('web');
       } else {
         setCurrentRoute('telegram');
       }
@@ -29,9 +38,14 @@ export const Router: React.FC = () => {
     };
   }, []);
 
-  if (currentRoute === 'terminal') {
-    return <App />;
+  // If token parameter exists, use Telegram mode (original App)
+  if (isTelegramMode) {
+    if (currentRoute === 'terminal') {
+      return <App />;
+    }
+    return <TelegramWebView />;
   }
 
-  return <TelegramWebView />;
+  // No token parameter, use Web mode with sidebar
+  return <WebTerminalApp />;
 };

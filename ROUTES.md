@@ -1,92 +1,131 @@
 # 路由说明
 
-本项目使用 Hash 路由来区分不同的界面模式。
+本项目根据 URL 参数自动切换不同的界面模式。
+
+## 模式检测
+
+系统会自动检测 URL 中是否包含 `?token=` 参数来决定使用哪种界面：
+
+### Telegram 模式（有 token 参数）
+- **检测条件**: URL 包含 `?token=xxx`
+- **界面**: 原始的 Telegram WebView 界面
+- **特点**: 
+  - 简洁的浮动命令面板
+  - 适合 Telegram Bot 嵌入
+  - 保持原有功能不变
+
+### Web 模式（无 token 参数）
+- **检测条件**: URL 不包含 `?token=` 参数
+- **界面**: 全新的侧边栏分屏界面
+- **特点**:
+  - 左侧边栏控制面板
+  - 多种布局模式（单屏、左右、上下、网格等）
+  - 可视化终端管理
+  - 适合独立 Web 访问
 
 ## 路由列表
 
-### 1. 默认路由 (Telegram WebView)
-- **URL**: `http://localhost:14443/` 或 `http://localhost:14443/#`
-- **用途**: Telegram WebView 主界面
-- **功能**: 
-  - 登录界面
-  - 模式选择页面
-  - 适合在 Telegram 中嵌入使用
+### 1. Telegram 模式路由
 
-### 2. 终端模式 (Advanced Terminal)
-- **URL**: `http://localhost:14443/#terminal`
-- **用途**: 完整的终端控制界面
-- **功能**:
+#### 默认路由 (Telegram WebView)
+- **URL**: `http://localhost:14443/?token=xxx`
+- **用途**: Telegram WebView 主界面
+- **功能**: 登录后的模式选择页面
+
+#### 终端模式
+- **URL**: `http://localhost:14443/?token=xxx#terminal`
+- **用途**: 完整的终端控制界面（Telegram 版本）
+- **功能**: 
   - 浮动命令面板
   - tmux 分屏控制
   - iframe 多终端模式
   - 语音控制
   - 命令历史
-  - AI 英文纠错
-  - 事件转发
 
-## 使用方式
+### 2. Web 模式路由
 
-### 在代码中切换路由
+#### 独立 Web 界面
+- **URL**: `http://localhost:14443/`（无 token 参数）
+- **用途**: 独立的 Web 终端管理界面
+- **功能**:
+  - 侧边栏控制面板
+  - 6 种布局模式
+  - 可视化终端管理
+  - 网络状态监控
+  - 添加/删除终端
 
-```typescript
-// 跳转到终端模式
-window.location.hash = '#terminal';
+## 布局模式（Web 模式专属）
 
-// 返回主页
-window.location.hash = '';
+Web 模式提供 6 种布局：
+
+1. **Single** (单屏) - 全屏显示一个终端
+2. **Horizontal** (左右分屏) - 两个终端左右排列
+3. **Vertical** (上下分屏) - 两个终端上下排列
+4. **Grid 2x2** (2x2 网格) - 四个终端网格排列
+5. **Grid 1+2** (1大2小上下) - 上方一个大终端，下方两个小终端
+6. **Grid 2+1** (2小1大左右) - 左侧两个小终端，右侧一个大终端
+
+## 使用示例
+
+### Telegram Bot 使用
+```python
+# Python telegram-bot 示例
+# 始终带上 token 参数
+keyboard = InlineKeyboardMarkup([[
+    InlineKeyboardButton("Open Terminal", 
+        web_app=WebAppInfo(url="https://your-domain.com/?token=xxx#terminal"))
+]])
 ```
 
-### 在 HTML 中使用链接
-
-```html
-<!-- 跳转到终端模式 -->
-<a href="#terminal">Open Terminal</a>
-
-<!-- 返回主页 -->
-<a href="#">Back to Home</a>
-```
-
-### 直接访问
-
+### 独立 Web 访问
 ```bash
-# Telegram WebView 主页
+# 直接访问，不带 token 参数
 http://localhost:14443/
 
-# 终端模式
-http://localhost:14443/#terminal
-
-# 带 token 的终端模式
-http://localhost:14443/?token=YOUR_TOKEN#terminal
-
-# 指定 bot 的终端模式
-http://localhost:14443/?bot_name=my_bot#terminal
+# 系统会显示登录界面，登录后进入 Web 模式
 ```
 
-## URL 参数
+### 开发测试
+```bash
+# 测试 Telegram 模式
+http://localhost:14443/?token=123456
 
-可以组合使用 query 参数和 hash 路由：
+# 测试 Web 模式
+http://localhost:14443/
+```
 
+## URL 参数说明
+
+### Telegram 模式参数
+- `token`: 认证 token（必需，触发 Telegram 模式）
+- `bot_name`: 指定要连接的 bot 名称（可选）
+
+示例：
 ```
 http://localhost:14443/?token=abc123&bot_name=my_bot#terminal
-                        ↑                              ↑
-                    Query 参数                    Hash 路由
 ```
 
-### 支持的 Query 参数
-
-- `token`: 认证 token（会自动保存到 localStorage）
-- `bot_name`: 指定要连接的 bot 名称（默认: `cicy_master_xk_bot`）
+### Web 模式
+- 不需要 URL 参数
+- Token 通过登录界面输入
+- 保存在 localStorage 中
 
 ## 技术实现
 
-### Router 组件
+### Router 组件逻辑
 
 ```typescript
-// Router.tsx
-- 监听 hashchange 事件
-- 根据 hash 值渲染不同组件
-- #terminal 或 #split → 渲染 App 组件
-- 其他 → 渲染 TelegramWebView 组件
+// 检测 URL 参数
+const urlParams = new URLSearchParams(window.location.search);
+const hasTokenParam = urlParams.has('token');
+
+if (hasTokenParam) {
+  // Telegram 模式：使用原有的 App 和 TelegramWebView
+  return <App /> or <TelegramWebView />;
+} else {
+  // Web 模式：使用新的 WebTerminalApp
+  return <WebTerminalApp />;
+}
 ```
 
 ### 组件结构
@@ -94,73 +133,46 @@ http://localhost:14443/?token=abc123&bot_name=my_bot#terminal
 ```
 index.tsx
   └─ Router
-      ├─ TelegramWebView (默认路由)
-      │   └─ LoginForm (未登录时)
-      │   └─ 模式选择页面 (已登录)
+      ├─ 检测 ?token= 参数
       │
-      └─ App (#terminal 路由)
-          └─ 完整的终端控制界面
+      ├─ Telegram 模式 (有 token)
+      │   ├─ TelegramWebView (默认)
+      │   └─ App (#terminal)
+      │
+      └─ Web 模式 (无 token)
+          └─ WebTerminalApp
+              ├─ LoginForm (未登录)
+              └─ 侧边栏 + 多终端界面 (已登录)
 ```
 
-## 开发建议
+## 界面对比
 
-### 添加新路由
-
-1. 在 `Router.tsx` 中添加新的路由类型：
-```typescript
-type Route = 'telegram' | 'terminal' | 'your-new-route';
-```
-
-2. 在 `handleHashChange` 中添加路由判断：
-```typescript
-if (hash === 'your-new-route') {
-  setCurrentRoute('your-new-route');
-}
-```
-
-3. 在 Router 组件中添加渲染逻辑：
-```typescript
-if (currentRoute === 'your-new-route') {
-  return <YourNewComponent />;
-}
-```
-
-### 路由守卫
-
-如果需要添加路由守卫（如登录检查），可以在 Router 组件中实现：
-
-```typescript
-const [isAuthenticated, setIsAuthenticated] = useState(false);
-
-useEffect(() => {
-  const token = localStorage.getItem('token');
-  setIsAuthenticated(!!token);
-}, []);
-
-if (!isAuthenticated && currentRoute !== 'telegram') {
-  // 重定向到登录页
-  window.location.hash = '';
-  return <TelegramWebView />;
-}
-```
+| 特性 | Telegram 模式 | Web 模式 |
+|------|--------------|----------|
+| 触发条件 | URL 有 `?token=` | URL 无 `?token=` |
+| 界面风格 | 浮动面板 | 侧边栏 |
+| 布局控制 | 按钮切换 | 可视化选择器 |
+| 终端管理 | 动态添加 | 列表管理 |
+| 适用场景 | Telegram Bot | 独立 Web 应用 |
+| 分屏方式 | tmux + iframe | 纯 iframe |
 
 ## 常见问题
 
-**Q: 为什么使用 Hash 路由而不是 History 路由？**
-A: Hash 路由不需要服务端配置，更适合单页应用。而且在 Telegram WebView 中更稳定。
+**Q: 如何在两种模式之间切换？**
+A: 
+- 进入 Telegram 模式：在 URL 中添加 `?token=xxx`
+- 进入 Web 模式：移除 URL 中的所有参数，直接访问根路径
 
-**Q: 如何在 Telegram Bot 中使用？**
-A: 在 Telegram Bot 中发送 Web App 链接时，使用对应的 hash 路由即可：
-```python
-# Python telegram-bot 示例
-keyboard = InlineKeyboardMarkup([[
-    InlineKeyboardButton("Open Terminal", 
-        web_app=WebAppInfo(url="https://your-domain.com/#terminal"))
-]])
-```
+**Q: Web 模式下如何使用 tmux 分屏？**
+A: Web 模式专注于 iframe 多终端管理。如需 tmux 分屏，请使用 Telegram 模式。
 
-**Q: 刷新页面会丢失路由吗？**
-A: 不会。Hash 路由会保留在 URL 中，刷新后会自动恢复到相同的路由。
+**Q: 两种模式可以共享 token 吗？**
+A: 可以。Token 保存在 localStorage 中，两种模式都可以使用。
 
-**Q: 可以同时使用多个 hash 参数吗？**
-A: 标准的 hash 路由只支持一个 hash 值。如果需要传递多个参数，建议使用 query 参数或在 hash 中使用路径格式（如 `#terminal/split/horizontal`）。
+**Q: 为什么要分两种模式？**
+A: 
+- Telegram 模式：保持简洁，适合在 Telegram 中嵌入使用
+- Web 模式：提供更丰富的可视化控制，适合独立使用
+
+**Q: 刷新页面会切换模式吗？**
+A: 不会。模式由 URL 参数决定，刷新页面不会改变 URL。
