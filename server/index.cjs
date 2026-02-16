@@ -37,7 +37,7 @@ function refreshTtydMap() {
           }
         }
         if (port && token && botName) {
-          map[botName] = { target: `http://127.0.0.1:${port}`, token };
+          map[botName] = { target: `http://127.0.0.1:${port}`, token, tmuxTarget: cmdline[cmdline.indexOf('-t') + 1] };
         }
       } catch {}
     }
@@ -103,17 +103,23 @@ const server = http.createServer((req, res) => {
   // API
   if (req.url === '/api/health') return json(res, { status: 'ok' });
 
-  // tmux send-keys
+  // tmux send-keys（支持 target 或 bot_name）
   if (req.url === '/api/tmux' && req.method === 'POST') {
     let body = '';
     req.on('data', c => body += c);
     req.on('end', () => {
       try {
-        const { text, target } = JSON.parse(body);
-        if (!text || !target) return json(res, { success: false, error: 'need text and target' });
-        // 转义单引号，用 tmux send-keys 发送
+        const { text, target, bot_name } = JSON.parse(body);
+        if (!text) return json(res, { success: false, error: 'need text' });
+        // 优先用 bot_name 查找 tmux target
+        let tmuxTarget = target;
+        if (!tmuxTarget && bot_name) {
+          const bot = getTtydTarget(bot_name);
+          if (bot) tmuxTarget = bot.tmuxTarget;
+        }
+        if (!tmuxTarget) return json(res, { success: false, error: 'need target or bot_name' });
         const escaped = text.replace(/'/g, "'\\''");
-        execSync(`tmux send-keys -t '${target}' '${escaped}' Enter`, { timeout: 10000 });
+        execSync(`tmux send-keys -t '${tmuxTarget}' '${escaped}' Enter`, { timeout: 10000 });
         return json(res, { success: true });
       } catch (e) {
         return json(res, { success: false, error: e.message });
