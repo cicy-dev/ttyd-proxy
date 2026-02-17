@@ -4,7 +4,7 @@
 # 用法: bash tmux-session-manager.sh [create|destroy|recreate|clean|status]
 
 ACTION="${1:-create}"
-LOAD_BOTS="/tmp/load_bots.py"
+LOAD_BOTS="/tmp/load_bots_tmux.py"
 LOG_TAG="[tmux-manager]"
 
 # 确保 load_bots.py 存在
@@ -13,11 +13,13 @@ ensure_loader() {
 import pymysql, json
 conn = pymysql.connect(host="localhost", user="root", password="pb200898", database="tts_bot", charset="utf8mb4")
 c = conn.cursor()
-c.execute("SELECT bot_name, tmux_session, tmux_window FROM bot_config WHERE status='active'")
+c.execute("SELECT bot_name, tmux_session, tmux_window, init_script, workspace FROM bot_config WHERE status='active'")
 print(json.dumps([{
     "bot_name": r[0],
     "tmux_session": r[1],
-    "tmux_window": r[2]
+    "tmux_window": r[2],
+    "init_script": r[3],
+    "workspace": r[4]
 } for r in c.fetchall()]))
 conn.close()
 PYEOF
@@ -40,6 +42,8 @@ create_one() {
   local bot_name="$1"
   local session="$2"
   local window_name="$3"
+  local init_script="$4"
+  local workspace="$5"
   
   # 如果会话已存在，先删除
   if session_exists "$session"; then
@@ -47,10 +51,74 @@ create_one() {
     tmux kill-session -t "$session" 2>/dev/null
   fi
   
-  # 创建新会话，窗口0命名为 window_name
-  echo "$LOG_TAG Creating session: $session with window: $window_name"
-  tmux new-session -d -s "$session" -n "$window_name"
+  # 处理 workspace 路径（展开 ~ 为 home 目录）
+  if [ -n "$workspace" ] && [ "$workspace" != "null" ]; then
+    workspace="${workspace/#\~/$HOME}"
+    
+    # 如果目录不存在，创建它
+    if [ ! -d "$workspace" ]; then
+      echo "$LOG_TAG Creating workspace directory: $workspace"
+      mkdir -p "$workspace"
+    fi
+    
+    echo "$LOG_TAG Using workspace: $workspace"
+  else
+    workspace="$HOME"
+  fi
+  
+  # 创建新会话，窗口0命名为 window_name，并设置工作目录
+  echo "$LOG_TAG Creating session: $session with window: $window_name in $workspace"
+  tmux new-session -d -s "$session" -n "$window_name" -c "$workspace"
   echo "$LOG_TAG ✓ Created $session:$window_name (target: $session:$window_name.0)"
+  
+  # 执行初始化脚本（如果存在）
+  if [ -n "$init_script" ] && [ "$init_script" != "null" ]; then
+    echo "$LOG_TAG Executing init script for $session"
+    local target="$session:$window_name.0"
+    
+    # 逐行处理初始化脚本
+    echo "$init_script" | while IFS= read -r line; do
+      if [ -z "$line" ]; then
+        continue
+      fi
+      
+      # 检查命令类型
+      if [[ "$line" =~ ^sleep:([0-9]+)$ ]]; then
+        # sleep:N - 等待 N 秒
+        local sleep_time="${BASH_REMATCH[1]}"
+        echo "$LOG_TAG   Sleep ${sleep_time}s"
+        sleep "$sleep_time"
+        
+      elif [[ "$line" =~ ^send:keys:(.+)$ ]]; then
+        # send:keys:xxx - 发送按键（不按回车）
+        local keys="${BASH_REMATCH[1]}"
+        echo "$LOG_TAG   Send keys: $keys"
+        tmux send-keys -t "$target" "$keys"
+        sleep 0.1
+        
+      elif [[ "$line" =~ ^send:cmd:(.+)$ ]]; then
+        # send:cmd:xxx - 发送命令（按回车）
+        local cmd="${BASH_REMATCH[1]}"
+        echo "$LOG_TAG   Send cmd: $cmd"
+        tmux send-keys -t "$target" "$cmd" Enter
+        sleep 0.1
+        
+      elif [ "$line" = "pwd" ]; then
+        # pwd - 显示当前目录
+        echo "$LOG_TAG   Send: pwd"
+        tmux send-keys -t "$target" "pwd" Enter
+        sleep 0.1
+        
+      else
+        # 默认：发送命令并按回车
+        echo "$LOG_TAG   Send: $line"
+        tmux send-keys -t "$target" "$line" Enter
+        sleep 0.1
+      fi
+    done
+    
+    echo "$LOG_TAG ✓ Init script completed for $session"
+  fi
 }
 
 # 销毁单个 bot 的 tmux 会话
@@ -102,13 +170,15 @@ create_all() {
     local name=$(echo "$bot" | jq -r '.bot_name')
     local session=$(echo "$bot" | jq -r '.tmux_session')
     local window=$(echo "$bot" | jq -r '.tmux_window')
+    local init_script=$(echo "$bot" | jq -r '.init_script')
+    local workspace=$(echo "$bot" | jq -r '.workspace')
     
     if [ -z "$session" ] || [ "$session" = "null" ]; then
       echo "$LOG_TAG Skipping $name: no tmux_session defined"
       continue
     fi
     
-    create_one "$name" "$session" "$window"
+    create_one "$name" "$session" "$window" "$init_script" "$workspace"
   done
 }
 
