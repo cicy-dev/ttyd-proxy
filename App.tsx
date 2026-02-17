@@ -15,10 +15,10 @@ const TMUX_TARGET = `master:${BOT_NAME}.0`;
 
 const DEFAULT_SETTINGS: AppSettings = {
   panelPosition: { x: 20, y: 20 },
-  panelSize: { width: 450, height: 120 },
+  panelSize: { width: 450, height: 160 },  // Increased height for 2-row textarea
   forwardEvents: false,
   lastDraft: '',
-  showPrompt: true,
+  showPrompt: true,  // Default to Prompt mode for Telegram
   showVoiceControl: false,
   voiceButtonPosition: { x: 40, y: 200 },
   commandHistory: []
@@ -80,7 +80,7 @@ const App: React.FC = () => {
         setToken(urlToken);
         setIsCheckingAuth(false);
         
-        // Load settings
+        // Load settings - ensure only prompt or voice mode is active
         const saved = localStorage.getItem(STORAGE_KEY);
         if (saved) {
           try {
@@ -88,11 +88,18 @@ const App: React.FC = () => {
             if (!parsed.commandHistory) {
               parsed.commandHistory = [];
             }
+            // Ensure only one mode is active at a time
+            if (parsed.showVoiceControl) {
+              parsed.showPrompt = false;
+            }
             setSettings({ ...DEFAULT_SETTINGS, ...parsed });
             if (parsed.lastDraft) setPromptText(parsed.lastDraft);
           } catch (e) {
             console.error("Failed to parse settings", e);
           }
+        } else {
+          // No saved settings, use defaults (showPrompt: true)
+          setSettings(DEFAULT_SETTINGS);
         }
         setIsLoaded(true);
         return;
@@ -340,9 +347,35 @@ const App: React.FC = () => {
     setCorrectedText('');
   };
 
+  // Auto-resize panel when corrected text is shown/hidden
+  useEffect(() => {
+    if (correctedText) {
+      // Expand panel height when showing corrected text
+      setSettings(prev => ({
+        ...prev,
+        panelSize: {
+          ...prev.panelSize,
+          height: Math.max(prev.panelSize.height, 320) // Expand to at least 320px
+        }
+      }));
+    } else {
+      // Restore to default height when corrected text is dismissed
+      setSettings(prev => ({
+        ...prev,
+        panelSize: {
+          ...prev.panelSize,
+          height: 160 // Back to default
+        }
+      }));
+    }
+  }, [correctedText]);
+
   // --- Event Forwarding ---
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    // When panel is hidden, don't forward events - let terminal handle them directly
+    if (!settings.showPrompt && !settings.showVoiceControl) return;
+    
     if (!settings.forwardEvents) return;
     const target = e.target as HTMLElement;
     if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
@@ -364,7 +397,7 @@ const App: React.FC = () => {
       altKey: e.altKey,
       metaKey: e.metaKey
     });
-  }, [settings.forwardEvents]);
+  }, [settings.forwardEvents, settings.showPrompt, settings.showVoiceControl]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -501,51 +534,30 @@ const App: React.FC = () => {
     <div className="relative w-screen h-screen bg-black overflow-hidden font-sans">
       {/* Full Screen Iframe */}
       <div className="absolute inset-0">
-        <TtydFrame url={iframeUrl} isInteractingWithOverlay={isInteracting} />
+        <TtydFrame url={iframeUrl} isInteractingWithOverlay={isInteracting || (!settings.showPrompt && !settings.showVoiceControl)} />
       </div>
 
-      {/* Minimized Toggle Button */}
-      {!settings.showPrompt && (
-        <div className="absolute top-4 right-4 z-40 flex gap-2">
-           <button
-                onClick={() => setMultiTerminalMode(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-full shadow-lg transition-all"
-            >
-                <Layout size={18} />
-                <span className="font-medium hidden md:inline">Multi-Terminal</span>
-           </button>
-
-           <button
-                onClick={toggleVoiceMode}
-                className={`flex items-center gap-2 px-4 py-2 rounded-full shadow-lg transition-all ${
-                    settings.showVoiceControl ? 'bg-red-600 text-white animate-pulse' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-                }`}
-            >
-                <Mic size={18} />
-                <span className="font-medium hidden md:inline">Voice</span>
-           </button>
-
-           <button
-                onClick={() => setSettings(prev => ({ ...prev, showPrompt: true, showVoiceControl: false }))}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-full shadow-lg transition-all"
-            >
-                <Terminal size={18} />
-                <span className="font-medium">Prompt</span>
-            </button>
-        </div>
+      {/* Voice Mode Active - Show button to return to Prompt */}
+      {settings.showVoiceControl && (
+        <button
+            onClick={() => setSettings(prev => ({ ...prev, showPrompt: true, showVoiceControl: false }))}
+            className="absolute top-4 right-4 z-40 p-3 bg-blue-600/80 hover:bg-blue-500 text-white rounded-full shadow-lg transition-all backdrop-blur-sm"
+            title="返回 Prompt 模式"
+        >
+            <Terminal size={20} />
+        </button>
       )}
 
       {/* Floating Prompt Controller */}
       {settings.showPrompt && (
           <FloatingPanel
-            title={`Terminal: ${BOT_NAME}`}
+            title=""
             initialPosition={settings.panelPosition}
             initialSize={settings.panelSize}
-            minSize={{ width: 340, height: 120 }}
+            minSize={{ width: 340, height: 160 }}
             onInteractionStart={() => setIsInteracting(true)}
             onInteractionEnd={() => setIsInteracting(false)}
             onChange={handlePanelChange}
-            onClose={() => setSettings(prev => ({ ...prev, showPrompt: false }))}
             headerActions={
                 <>
                     {/* Network Status Indicator */}
@@ -570,65 +582,20 @@ const App: React.FC = () => {
                         </span>
                     </div>
 
-                    {/* Tmux Split Controls */}
-                    <TmuxSplitControls
-                        tmuxTarget={TMUX_TARGET}
-                        onSplitCommand={handleTmuxSplitCommand}
-                    />
-
-                    {/* Multi-Terminal Mode Button */}
+                    {/* Toggle Voice Control - hides prompt panel when clicked */}
                     <button
-                        onClick={() => setMultiTerminalMode(true)}
-                        className="p-2 rounded-lg text-gray-400 hover:bg-purple-600 hover:text-white transition-all"
-                        title="Multi-Terminal Mode (iframe split)"
-                    >
-                        <Layout size={18} />
-                    </button>
-
-                    {/* History Button */}
-                    <button
-                        onClick={() => setShowHistory(!showHistory)}
-                        className={`p-2 rounded-lg transition-all ${
-                            showHistory
-                                ? 'bg-blue-600 text-white'
-                                : 'text-gray-400 hover:bg-gray-700 hover:text-white'
-                        }`}
-                        title="Command History"
-                    >
-                        <History size={18} />
-                    </button>
-
-                    {/* Toggle Voice Control */}
-                    <button
-                        onClick={toggleVoiceMode}
-                        className={`p-2 rounded-lg transition-all ${
-                            settings.showVoiceControl
-                                ? 'bg-red-600 text-white'
-                                : 'text-gray-400 hover:bg-gray-700 hover:text-white'
-                        }`}
-                        title="Switch to Voice Mode"
+                        onClick={() => setSettings(prev => ({ ...prev, showPrompt: false, showVoiceControl: true }))}
+                        className="p-2 rounded-lg text-gray-400 hover:bg-red-600 hover:text-white transition-all"
+                        title="切换到语音模式"
                     >
                         <Mic size={18} />
-                    </button>
-
-                    {/* Event Forwarding Toggle */}
-                    <button 
-                        onClick={toggleEventForwarding}
-                        className={`p-2 rounded-lg transition-all flex items-center gap-2 ${
-                            settings.forwardEvents 
-                            ? 'bg-green-600 text-white' 
-                            : 'text-gray-400 hover:bg-gray-700 hover:text-white'
-                        }`}
-                        title={settings.forwardEvents ? "Event Forwarding Active" : "Enable Event Forwarding"}
-                    >
-                        <Keyboard size={18} />
                     </button>
                 </>
             }
           >
             <form onSubmit={handleSendPrompt} className="relative h-full flex flex-col p-2">
               <div className="flex-1 flex flex-col min-h-0">
-                <div className="relative">
+                <div className="relative flex-1 flex flex-col min-h-0">
                   <textarea
                     ref={textareaRef}
                     value={promptText}
@@ -684,9 +651,8 @@ const App: React.FC = () => {
                         }
                       }
                     }}
-                    rows={2}
                     placeholder="Type command..."
-                    className="w-full bg-black/50 text-white rounded-lg border border-gray-700 p-2 pr-2 pb-10 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none resize-none text-sm shadow-inner placeholder:text-gray-600 placeholder:opacity-50"
+                    className="w-full h-full bg-black/50 text-white rounded-lg border border-gray-700 p-2 pr-2 pb-10 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none resize-none text-sm shadow-inner placeholder:text-gray-600 placeholder:opacity-50"
                     disabled={isSending}
                   />
                   

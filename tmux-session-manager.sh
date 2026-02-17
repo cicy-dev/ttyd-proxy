@@ -1,6 +1,7 @@
 #!/bin/bash
 # tmux-session-manager.sh — 根据 MySQL bot_config 创建/管理 tmux 会话
-# 用法: bash tmux-session-manager.sh [create|destroy|recreate|status]
+# 规范：每个 bot 一个会话，会话名=tmux_session，窗口0名称=bot_name
+# 用法: bash tmux-session-manager.sh [create|destroy|recreate|clean|status]
 
 ACTION="${1:-create}"
 LOAD_BOTS="/tmp/load_bots.py"
@@ -12,12 +13,11 @@ ensure_loader() {
 import pymysql, json
 conn = pymysql.connect(host="localhost", user="root", password="pb200898", database="tts_bot", charset="utf8mb4")
 c = conn.cursor()
-c.execute("SELECT bot_name, tmux_session, tmux_window, group_name FROM bot_config WHERE status='active'")
+c.execute("SELECT bot_name, tmux_session, tmux_window FROM bot_config WHERE status='active'")
 print(json.dumps([{
     "bot_name": r[0],
     "tmux_session": r[1],
-    "tmux_window": r[2],
-    "group": r[3]
+    "tmux_window": r[2]
 } for r in c.fetchall()]))
 conn.close()
 PYEOF
@@ -35,50 +35,58 @@ session_exists() {
   tmux has-session -t "$session" 2>/dev/null
 }
 
-# 检查 tmux 窗口是否存在
-window_exists() {
-  local session="$1"
-  local window="$2"
-  tmux list-windows -t "$session" 2>/dev/null | grep -q "^${window}:"
-}
-
-# 创建单个 bot 的 tmux 会话和窗口
+# 创建单个 bot 的 tmux 会话（严格按照规范）
 create_one() {
   local bot_name="$1"
   local session="$2"
-  local window="$3"
+  local window_name="$3"
   
-  # 创建会话（如果不存在）
-  if ! session_exists "$session"; then
-    echo "$LOG_TAG Creating session: $session"
-    tmux new-session -d -s "$session" -n "$window"
-    echo "$LOG_TAG ✓ Session $session created"
-  else
-    echo "$LOG_TAG Session $session already exists"
+  # 如果会话已存在，先删除
+  if session_exists "$session"; then
+    echo "$LOG_TAG Session $session already exists, removing it"
+    tmux kill-session -t "$session" 2>/dev/null
   fi
   
-  # 创建窗口（如果不存在）
-  if ! window_exists "$session" "$window"; then
-    echo "$LOG_TAG Creating window: $session:$window"
-    tmux new-window -t "$session" -n "$window"
-    echo "$LOG_TAG ✓ Window $session:$window created"
-  else
-    echo "$LOG_TAG Window $session:$window already exists"
-  fi
-  
-  # 重命名窗口为 bot_name（方便识别）
-  tmux rename-window -t "$session:$window" "$bot_name" 2>/dev/null || true
+  # 创建新会话，窗口0命名为 window_name
+  echo "$LOG_TAG Creating session: $session with window: $window_name"
+  tmux new-session -d -s "$session" -n "$window_name"
+  echo "$LOG_TAG ✓ Created $session:$window_name (target: $session:$window_name.0)"
 }
 
-# 销毁单个 bot 的 tmux 窗口
+# 销毁单个 bot 的 tmux 会话
 destroy_one() {
   local session="$1"
-  local window="$2"
   
-  if window_exists "$session" "$window"; then
-    echo "$LOG_TAG Destroying window: $session:$window"
-    tmux kill-window -t "$session:$window" 2>/dev/null || true
+  if session_exists "$session"; then
+    echo "$LOG_TAG Destroying session: $session"
+    tmux kill-session -t "$session" 2>/dev/null
+    echo "$LOG_TAG ✓ Session $session destroyed"
   fi
+}
+
+# 清理所有不在 MySQL 中的会话
+clean_orphans() {
+  local bots_json
+  bots_json=$(load_bots)
+  
+  # 获取所有应该存在的会话名
+  local valid_sessions=$(echo "$bots_json" | jq -r '.[].tmux_session' | sort -u)
+  
+  # 获取当前所有 tmux 会话
+  local current_sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null || echo "")
+  
+  if [ -z "$current_sessions" ]; then
+    echo "$LOG_TAG No tmux sessions to clean"
+    return
+  fi
+  
+  echo "$LOG_TAG Cleaning orphan sessions..."
+  for session in $current_sessions; do
+    if ! echo "$valid_sessions" | grep -q "^${session}$"; then
+      echo "$LOG_TAG Removing orphan session: $session"
+      tmux kill-session -t "$session" 2>/dev/null
+    fi
+  done
 }
 
 # 创建所有 bot 的 tmux 会话
@@ -104,7 +112,7 @@ create_all() {
   done
 }
 
-# 销毁所有 bot 的 tmux 窗口
+# 销毁所有 bot 的 tmux 会话
 destroy_all() {
   local bots_json
   bots_json=$(load_bots)
@@ -115,17 +123,17 @@ destroy_all() {
 
   echo "$bots_json" | jq -c '.[]' | while read -r bot; do
     local session=$(echo "$bot" | jq -r '.tmux_session')
-    local window=$(echo "$bot" | jq -r '.tmux_window')
     
     if [ -n "$session" ] && [ "$session" != "null" ]; then
-      destroy_one "$session" "$window"
+      destroy_one "$session"
     fi
   done
 }
 
-# 重新创建所有
+# 重新创建所有（清理 + 创建）
 recreate_all() {
-  echo "$LOG_TAG Recreating all tmux sessions"
+  echo "$LOG_TAG Recreating all tmux sessions (strict mode)"
+  clean_orphans
   destroy_all
   sleep 1
   create_all
@@ -140,7 +148,7 @@ show_status() {
     return
   fi
 
-  echo "$LOG_TAG Tmux Sessions Status:"
+  echo "$LOG_TAG Expected Tmux Sessions (from MySQL):"
   echo "$bots_json" | jq -c '.[]' | while read -r bot; do
     local name=$(echo "$bot" | jq -r '.bot_name')
     local session=$(echo "$bot" | jq -r '.tmux_session')
@@ -150,20 +158,29 @@ show_status() {
       continue
     fi
     
+    local target="${session}:${window}.0"
     if session_exists "$session"; then
-      if window_exists "$session" "$window"; then
-        echo "  ✓ $name ($session:$window) - EXISTS"
+      # 检查窗口数量
+      local window_count=$(tmux list-windows -t "$session" 2>/dev/null | wc -l)
+      if [ "$window_count" -eq 1 ]; then
+        echo "  ✓ $name → $target (OK)"
       else
-        echo "  ⚠ $name ($session:$window) - SESSION EXISTS, WINDOW MISSING"
+        echo "  ⚠ $name → $target (WARNING: $window_count windows, should be 1)"
       fi
     else
-      echo "  ✗ $name ($session:$window) - SESSION MISSING"
+      echo "  ✗ $name → $target (MISSING)"
     fi
   done
   
   echo ""
   echo "$LOG_TAG Current tmux sessions:"
-  tmux list-sessions 2>/dev/null || echo "  No tmux sessions found"
+  if tmux list-sessions 2>/dev/null; then
+    echo ""
+    echo "$LOG_TAG Detailed view:"
+    ~/tools/tre 2>/dev/null || echo "  tre command not available"
+  else
+    echo "  No tmux sessions found"
+  fi
 }
 
 # 主逻辑
@@ -177,11 +194,19 @@ case "$ACTION" in
   recreate)
     recreate_all
     ;;
+  clean)
+    clean_orphans
+    ;;
   status)
     show_status
     ;;
   *)
-    echo "Usage: $0 {create|destroy|recreate|status}"
+    echo "Usage: $0 {create|destroy|recreate|clean|status}"
+    echo "  create   - Create missing sessions"
+    echo "  destroy  - Destroy all bot sessions"
+    echo "  recreate - Clean and recreate all sessions (strict mode)"
+    echo "  clean    - Remove orphan sessions not in MySQL"
+    echo "  status   - Show current status"
     exit 1
     ;;
 esac
