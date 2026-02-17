@@ -69,6 +69,12 @@ create_one() {
   # 创建新会话，窗口0命名为 window_name，并设置工作目录
   echo "$LOG_TAG Creating session: $session with window: $window_name in $workspace"
   tmux new-session -d -s "$session" -n "$window_name" -c "$workspace"
+  
+  # 清除 VSCode 的 PROMPT_COMMAND 环境变量
+  local target="$session:$window_name.0"
+  tmux send-keys -t "$target" "unset PROMPT_COMMAND" Enter
+  sleep 0.1
+  
   echo "$LOG_TAG ✓ Created $session:$window_name (target: $session:$window_name.0)"
   
   # 执行初始化脚本（如果存在）
@@ -76,43 +82,23 @@ create_one() {
     echo "$LOG_TAG Executing init script for $session"
     local target="$session:$window_name.0"
     
-    # 逐行处理初始化脚本
+    # 逐行处理初始化脚本，每行是原始 tmux 命令
+    # 支持变量替换: {target} -> session:window.0
     echo "$init_script" | while IFS= read -r line; do
       if [ -z "$line" ]; then
         continue
       fi
       
-      # 检查命令类型
+      # sleep:N 特殊处理
       if [[ "$line" =~ ^sleep:([0-9]+)$ ]]; then
-        # sleep:N - 等待 N 秒
         local sleep_time="${BASH_REMATCH[1]}"
         echo "$LOG_TAG   Sleep ${sleep_time}s"
         sleep "$sleep_time"
-        
-      elif [[ "$line" =~ ^send:keys:(.+)$ ]]; then
-        # send:keys:xxx - 发送按键（不按回车）
-        local keys="${BASH_REMATCH[1]}"
-        echo "$LOG_TAG   Send keys: $keys"
-        tmux send-keys -t "$target" "$keys"
-        sleep 0.1
-        
-      elif [[ "$line" =~ ^send:cmd:(.+)$ ]]; then
-        # send:cmd:xxx - 发送命令（按回车）
-        local cmd="${BASH_REMATCH[1]}"
-        echo "$LOG_TAG   Send cmd: $cmd"
-        tmux send-keys -t "$target" "$cmd" Enter
-        sleep 0.1
-        
-      elif [ "$line" = "pwd" ]; then
-        # pwd - 显示当前目录
-        echo "$LOG_TAG   Send: pwd"
-        tmux send-keys -t "$target" "pwd" Enter
-        sleep 0.1
-        
       else
-        # 默认：发送命令并按回车
-        echo "$LOG_TAG   Send: $line"
-        tmux send-keys -t "$target" "$line" Enter
+        # 替换 {target} 变量
+        local cmd="${line//\{target\}/$target}"
+        echo "$LOG_TAG   Exec: $cmd"
+        eval "$cmd"
         sleep 0.1
       fi
     done
