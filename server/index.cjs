@@ -91,7 +91,8 @@ const MIME = {
 const distPath = path.join(__dirname, '..', 'dist');
 
 function serveStatic(req, res) {
-  let filePath = path.join(distPath, req.url === '/' ? 'index.html' : req.url.split('?')[0]);
+  const urlPath = new URL(req.url, 'http://localhost').pathname;
+  let filePath = path.join(distPath, urlPath === '/' ? 'index.html' : urlPath);
   if (!fs.existsSync(filePath)) filePath = path.join(distPath, 'index.html');
   const ext = path.extname(filePath);
   try {
