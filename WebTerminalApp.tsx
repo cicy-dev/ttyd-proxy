@@ -111,27 +111,9 @@ const WebTerminalApp: React.FC = () => {
   // Check auth on mount
   useEffect(() => {
     const init = async () => {
-      // Check URL for token parameter
-      const urlParams = new URLSearchParams(window.location.search);
-      const urlToken = urlParams.get('token');
+      // Note: We don't handle URL token here because Router.tsx handles it
+      // If we're in WebTerminalApp, it means there's no token in URL
       
-      if (urlToken) {
-        // Save token from URL
-        localStorage.setItem('token', urlToken);
-        // Remove token from URL
-        urlParams.delete('token');
-        const newUrl = window.location.pathname + (urlParams.toString() ? '?' + urlParams.toString() : '') + window.location.hash;
-        window.history.replaceState({}, '', newUrl);
-        // Set token and skip login
-        setToken(urlToken);
-        const savedHistory = localStorage.getItem('command_history');
-        if (savedHistory) {
-          setCommandHistory(JSON.parse(savedHistory));
-        }
-        setIsCheckingAuth(false);
-        return;
-      }
-
       // Check saved token
       const savedToken = localStorage.getItem('token');
       if (savedToken) {

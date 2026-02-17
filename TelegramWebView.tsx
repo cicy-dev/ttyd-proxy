@@ -31,13 +31,10 @@ const LoginForm: React.FC<{ onLogin: (token: string) => void }> = ({ onLogin }) 
 };
 
 const TelegramWebView: React.FC = () => {
-  // URL ?token= 自动保存
+  // URL ?token= 自动保存（但不移除，保持 Telegram 模式）
   const urlToken = new URLSearchParams(window.location.search).get('token');
   if (urlToken) {
     localStorage.setItem('token', urlToken);
-    const url = new URL(window.location.href);
-    url.searchParams.delete('token');
-    window.history.replaceState({}, '', url.pathname + url.search + url.hash);
   }
 
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));

@@ -73,7 +73,32 @@ const App: React.FC = () => {
   
   useEffect(() => {
     const init = async () => {
-      // Check for token first
+      // Check URL for token parameter (Telegram mode)
+      const urlToken = new URLSearchParams(window.location.search).get('token');
+      if (urlToken) {
+        localStorage.setItem('token', urlToken);
+        setToken(urlToken);
+        setIsCheckingAuth(false);
+        
+        // Load settings
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved);
+            if (!parsed.commandHistory) {
+              parsed.commandHistory = [];
+            }
+            setSettings({ ...DEFAULT_SETTINGS, ...parsed });
+            if (parsed.lastDraft) setPromptText(parsed.lastDraft);
+          } catch (e) {
+            console.error("Failed to parse settings", e);
+          }
+        }
+        setIsLoaded(true);
+        return;
+      }
+
+      // Check for saved token
       const savedToken = localStorage.getItem('token');
       if (savedToken) {
         // Verify token is still valid
