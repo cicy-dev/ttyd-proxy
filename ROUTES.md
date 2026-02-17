@@ -8,20 +8,44 @@
 
 ### Telegram 模式（有 token 参数）
 - **检测条件**: URL 包含 `?token=xxx`
-- **界面**: 原始的 Telegram WebView 界面
+- **界面**: Telegram 模式的终端界面（App.tsx）
 - **特点**: 
-  - 简洁的浮动命令面板
+  - 浮动命令面板
+  - tmux 分屏控制
+  - 语音控制
+  - 命令历史
   - 适合 Telegram Bot 嵌入
-  - 保持原有功能不变
+  - 直接显示终端，无需选择
 
 ### Web 模式（无 token 参数）
 - **检测条件**: URL 不包含 `?token=` 参数
-- **界面**: 全新的侧边栏分屏界面
+- **界面**: 侧边栏分屏界面（WebTerminalApp.tsx）
 - **特点**:
   - 左侧边栏控制面板
-  - 多种布局模式（单屏、左右、上下、网格等）
-  - 可视化终端管理
+  - tmux 窗格列表（从 tre 命令获取）
+  - 可选择不同的窗格
+  - 多个 iframe（用 display:none 隐藏未选中的）
   - 适合独立 Web 访问
+
+## URL 参数
+
+### Telegram 模式参数
+- `token`: 认证 token（必需，触发 Telegram 模式）
+- `bot_name`: 指定要连接的 bot 名称（可选，默认: `cicy_master_xk_bot`）
+
+示例：
+```
+# 使用默认 bot
+http://localhost:14443/?token=abc123
+
+# 指定 bot
+http://localhost:14443/?token=abc123&bot_name=my_custom_bot
+```
+
+### Web 模式
+- 不需要 URL 参数
+- Token 通过登录界面输入或从 localStorage 读取
+- Bot 列表从 tmux 会话自动获取
 
 ## 路由列表
 
