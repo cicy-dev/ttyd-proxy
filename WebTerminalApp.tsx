@@ -75,11 +75,22 @@ const WebTerminalApp: React.FC = () => {
 
   // Load tmux panes
   const loadTmuxPanes = async () => {
+    if (!token) {
+      console.log('No token available, skipping pane load');
+      return;
+    }
+    
     setIsLoadingPanes(true);
     try {
       const res = await fetch('/api/tmux-list', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      
+      if (!res.ok) {
+        console.error('Failed to load tmux panes:', res.status, res.statusText);
+        return;
+      }
+      
       const data = await res.json();
       if (data.success && data.output) {
         const panes = parseTreOutput(data.output);
@@ -87,6 +98,8 @@ const WebTerminalApp: React.FC = () => {
         if (panes.length > 0 && !selectedPane) {
           setSelectedPane(panes[0]);
         }
+      } else {
+        console.error('API returned error:', data.error);
       }
     } catch (error) {
       console.error('Failed to load tmux panes', error);
@@ -147,7 +160,11 @@ const WebTerminalApp: React.FC = () => {
   // Load panes when token is available
   useEffect(() => {
     if (token) {
-      loadTmuxPanes();
+      // Add a small delay to ensure token is properly set
+      const timer = setTimeout(() => {
+        loadTmuxPanes();
+      }, 100);
+      return () => clearTimeout(timer);
     }
   }, [token]);
 
