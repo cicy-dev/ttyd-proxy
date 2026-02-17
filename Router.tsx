@@ -40,10 +40,8 @@ export const Router: React.FC = () => {
 
   // If token parameter exists, use Telegram mode (original App)
   if (isTelegramMode) {
-    if (currentRoute === 'terminal') {
-      return <App />;
-    }
-    return <TelegramWebView />;
+    // Directly go to terminal interface, skip TelegramWebView selection
+    return <App />;
   }
 
   // No token parameter, use Web mode with sidebar
