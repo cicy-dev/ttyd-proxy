@@ -129,11 +129,6 @@ proxy.on('error', (err: Error) => {
   console.error('Proxy error:', err.message);
 });
 
-const cssStyle = `
-<style>
-  .xterm .xterm-viewport::-webkit-scrollbar { width: 0 !important; height: 0 !important; display: none !important; }
-  .xterm .xterm-viewport { scrollbar-width: none !important; -ms-overflow-style: none !important; }
-</style>`;
 
 proxy.on('error', (err: Error) => {
   console.error('Proxy error:', err.message);
@@ -203,7 +198,10 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
   if (urlPath.startsWith('/ttyd/')) {
     const m = req.url?.match(/^\/ttyd\/([^/]+)(\/.*)?$/);
     if (m) {
-      const name = m[1];
+
+      const url = new URL(req.url || '/', 'http://localhost');
+      const queryToken = url.searchParams.get('token');
+      const name = m[1]
       let subPath = m[2] || '/';
       subPath = subPath.split('?')[0];
 
@@ -218,8 +216,6 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       }
 
       // All other sub-paths require query token
-      const url = new URL(req.url || '/', 'http://localhost');
-      const queryToken = url.searchParams.get('token');
       if (queryToken !== TOKEN) {
         res.writeHead(401);
         return res.end('unauthorized');
@@ -249,7 +245,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
           let body = '';
           proxyRes.on('data', (chunk) => body += chunk);
           proxyRes.on('end', () => {
-            body = body.replace('</head>', cssStyle + '</head>');
+            body = body.replace('</head>', '</head>');
             res.writeHead(200, { 'Content-Type': 'text/html' });
             res.end(body);
           });
