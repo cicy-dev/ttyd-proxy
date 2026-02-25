@@ -6,6 +6,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import { URL } from 'url';
+import { Transform } from 'stream';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { config, API_PATHS } from './config.js';
@@ -367,7 +368,6 @@ server.on('upgrade', (req: http.IncomingMessage, socket: import('stream').Duplex
         // 重写 pipe：当 http-proxy 执行 socket.pipe(proxySocket) 时插入过滤
         const origPipe = socket.pipe.bind(socket);
         (socket as any).pipe = function(dest: any, opts?: any) {
-          const { Transform } = require('stream');
           const filter = new Transform({
             transform(chunk: Buffer, _enc: string, cb: Function) {
               // ttyd 协议：0x30 = 客户端输入，丢弃
