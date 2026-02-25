@@ -40,36 +40,6 @@ interface GlobalConfig {
   api_token: string;
 }
 
-function loadOrGenerateToken(): string {
-  const configPath = path.join(os.homedir(), 'global.json');
-  const configDir = path.dirname(configPath);
-
-  try {
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true });
-    }
-
-    if (fs.existsSync(configPath)) {
-      const config: GlobalConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      if (config.api_token) {
-        console.log(`✓ Loaded token from ${configPath}`);
-        return config.api_token;
-      }
-    }
-
-    const newToken = crypto.randomBytes(32).toString('hex');
-    const config: GlobalConfig = { api_token: newToken };
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
-    console.log(`✓ Generated new token and saved to ${configPath}`);
-    return newToken;
-  } catch (e) {
-    const error = e as Error;
-    console.error('Error loading/generating token:', error.message);
-    return '123456';
-  }
-}
-
-const TOKEN = loadOrGenerateToken();
 
 // --- Port cache: loaded at startup, avoids per-request fast-api lookup ---
 interface PaneConfig { port: number; token: string; }
@@ -78,13 +48,13 @@ const paneCache: Record<string, PaneConfig> = {};
 async function loadPaneCache(): Promise<void> {
   try {
     const res = await fetch(`${config.fastApiBaseUrl}${API_PATHS.TTYD_LIST}`, {
-      headers: { 'Authorization': `Bearer ${TOKEN}`, 'Accept': 'application/json' }
+      headers: { "Accept": "application/json" }
     });
     if (!res.ok) { console.warn('loadPaneCache: fast-api returned', res.status); return; }
     const data = await res.json() as { configs?: Array<{ pane_id: string; ttyd_port: number }> };
-    const token = TOKEN; // all panes share the same token
+    // Token removed // all panes share the same token
     for (const c of data.configs || []) {
-      paneCache[c.pane_id] = { port: c.ttyd_port, token };
+      paneCache[c.pane_id] = { port: c.ttyd_port, token: "" };
     }
     console.log(`✓ Pane cache loaded: ${Object.keys(paneCache).length} panes`);
   } catch (e) {
@@ -97,11 +67,11 @@ async function getPaneConfig(name: string): Promise<PaneConfig | null> {
   // Cache miss: fetch from fast-api and update cache
   try {
     const res = await fetch(`${config.fastApiBaseUrl}${API_PATHS.TTYD_BY_NAME(name)}`, {
-      headers: { 'Authorization': `Bearer ${TOKEN}`, 'Accept': 'application/json' }
+      headers: { "Accept": "application/json" }
     });
     if (!res.ok) return null;
     const data = await res.json() as { port: number; token: string };
-    paneCache[name] = { port: data.port, token: TOKEN };
+    paneCache[name] = { port: data.port, token: "REMOVED" };
     return paneCache[name];
   } catch { return null; }
 }
@@ -242,7 +212,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
         
         const fastRes = await fetch(`${config.fastApiBaseUrl}${API_PATHS.TMUX_SEND}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer REMOVED` },
           body: JSON.stringify({ win_id: paneTarget, keys: key })
         });
         const data = await fastRes.json();
