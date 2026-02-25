@@ -8,7 +8,6 @@ services:
       - ./server/package.json:/app/package.json:ro
       - /app/node_modules
       - /var/run/docker.sock:/var/run/docker.sock
-      - ~/global.json:/root/global.json:ro
     environment:
       - NODE_ENV=development
       - PORT=6901
