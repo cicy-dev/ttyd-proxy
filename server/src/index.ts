@@ -106,13 +106,79 @@ async function getPaneConfig(name: string): Promise<PaneConfig | null> {
   } catch { return null; }
 }
 
-function checkToken(req: http.IncomingMessage): boolean {
-  const url = new URL(req.url || '/', 'http://localhost');
-  if (url.searchParams.get('token') === TOKEN) return true;
-  const auth = req.headers['authorization'];
-  if (auth === 'Bearer ' + TOKEN) return true;
-  return false;
+// Phase 2: New authentication and pane_id normalization
+
+// Normalize pane_id: w-20074 -> w-20074:main.0
+function normalizePaneId(paneId: string): string {
+  if (!paneId) return paneId;
+  if (!paneId.includes(':')) {
+    return `${paneId}:main.0`;
+  }
+  return paneId;
 }
+
+// Token verification cache
+interface TokenVerifyResult {
+  valid: boolean;
+  perms?: string[];
+  group_id?: number | null;
+  pane_id?: string | null;
+  expires_at?: string | null;
+}
+
+const tokenCache = new Map<string, { result: TokenVerifyResult; cachedAt: number }>();
+const CACHE_TTL = 30000; // 30 seconds
+
+async function verifyToken(token: string): Promise<TokenVerifyResult> {
+  // Check cache
+  const now = Date.now();
+  const cached = tokenCache.get(token);
+  if (cached && (now - cached.cachedAt) < CACHE_TTL) {
+    return cached.result;
+  }
+
+  // Call FastAPI verify-token
+  try {
+    const res = await fetch(`${config.fastApiBaseUrl}/api/auth/verify-token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token })
+    });
+
+    if (!res.ok) {
+      const result = { valid: false };
+      tokenCache.set(token, { result, cachedAt: now });
+      return result;
+    }
+
+    const result: TokenVerifyResult = await res.json();
+    tokenCache.set(token, { result, cachedAt: now });
+    return result;
+  } catch (e) {
+    console.error('[AUTH] verify-token error:', (e as Error).message);
+    return { valid: false };
+  }
+}
+
+// Extract token from request
+function extractToken(req: http.IncomingMessage): string | null {
+  const url = new URL(req.url || '/', 'http://localhost');
+  const queryToken = url.searchParams.get('token');
+  if (queryToken) return queryToken;
+
+  const auth = req.headers['authorization'];
+  if (auth && auth.startsWith('Bearer ')) {
+    return auth.substring(7);
+  }
+
+  return null;
+}
+
+// Check if token has required permission
+function hasPermission(result: TokenVerifyResult, perm: string): boolean {
+  return result.valid && result.perms?.includes(perm) === true;
+}
+
 
 const proxy = httpProxy.createProxyServer({});
 
@@ -155,13 +221,17 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
   }
 
   if (urlPath === '/api/refresh-cache' && req.method === 'POST') {
-    if (!checkToken(req)) { res.writeHead(401); return res.end('unauthorized'); }
+    const token = extractToken(req);
+    const authResult = await verifyToken(token || '');
+    if (!authResult.valid) { res.writeHead(401); return res.end('unauthorized'); }
     await loadPaneCache();
     return json(res, { success: true, panes: Object.keys(paneCache) });
   }
 
   if (urlPath === '/api/key' && req.method === 'POST') {
-    if (!checkToken(req)) { res.writeHead(401); return res.end('unauthorized'); }
+    const token = extractToken(req);
+    const authResult = await verifyToken(token || '');
+    if (!authResult.valid) { res.writeHead(401); return res.end('unauthorized'); }
     let body = '';
     req.on('data', chunk => body += chunk);
     req.on('end', async () => {
@@ -192,7 +262,8 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
 
       const url = new URL(req.url || '/', 'http://localhost');
       const queryToken = url.searchParams.get('token');
-      const name = decodeURIComponent(m[1])
+      let name = decodeURIComponent(m[1]);
+      name = normalizePaneId(name)
       let subPath = m[2] || '/';
       subPath = subPath.split('?')[0];
 
@@ -206,10 +277,17 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
         return proxy.web(req, res, { target: 'http://' + HOST_IP + ':' + cfg.port });
       }
 
-      // All other sub-paths require query token
-      if (queryToken !== TOKEN) {
+      // All other sub-paths require token verification
+      const authResult = await verifyToken(queryToken || '');
+      if (!authResult.valid) {
         res.writeHead(401);
         return res.end('unauthorized');
+      }
+
+      // Check pane_id permission
+      if (authResult.pane_id && authResult.pane_id !== name) {
+        res.writeHead(403);
+        return res.end('forbidden: token not allowed for this pane');
       }
 
       const cfg = await getPaneConfig(name);
@@ -263,7 +341,9 @@ window.$RefreshSig$ = () => (type) => type;</script>
     }
   }
 
-  if (!checkToken(req)) {
+  const token = extractToken(req);
+  const authResult = await verifyToken(token || '');
+  if (!authResult.valid) {
     res.writeHead(401, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'unauthorized' }));
   }
@@ -272,17 +352,20 @@ window.$RefreshSig$ = () => (type) => type;</script>
 server.on('upgrade', (req: http.IncomingMessage, socket: import('stream').Duplex, head: Buffer) => {
   const m = req.url?.match(/^\/ttyd\/([^/]+)(\/.*)?$/);
   if (m) {
-    const name = decodeURIComponent(m[1]);
+    let name = decodeURIComponent(m[1]);
+      name = normalizePaneId(name);
 
-    // Check token
-    const wsUrl = new URL(req.url || '/', 'http://localhost');
-    const wsQueryToken = wsUrl.searchParams.get('token');
-    if (wsQueryToken !== TOKEN) {
-      socket.destroy();
-      return;
-    }
+    // Check token (async)
+    const wsToken = extractToken(req);
+    verifyToken(wsToken || '').then(authResult => {
+      if (!authResult.valid) {
+        socket.destroy();
+        return;
+      }
 
-    getPaneConfig(name).then(cfg => {
+      return getPaneConfig(name);
+    }).then(cfg => {
+      if (!cfg) { socket.destroy(); return; }
       if (!cfg) { socket.destroy(); return; }
       req.url = m[2] || '/';
       delete req.headers['authorization'];
