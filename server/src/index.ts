@@ -354,6 +354,7 @@ server.on('upgrade', (req: http.IncomingMessage, socket: import('stream').Duplex
     let name = decodeURIComponent(m[1].split('?')[0]);
       name = normalizePaneId(name);
 
+    // Check token (async)
     const wsToken = extractToken(req);
     verifyToken(wsToken || '').then(authResult => {
       if (!authResult.valid) {
@@ -361,32 +362,14 @@ server.on('upgrade', (req: http.IncomingMessage, socket: import('stream').Duplex
         return;
       }
 
-      const isReadOnly = hasPermission(authResult, 'ttyd_read') && !hasPermission(authResult, 'ttyd_write');
-      
-      return getPaneConfig(name).then(cfg => {
-        if (!cfg) { socket.destroy(); return; }
-        req.url = m[2] || '/';
-        delete req.headers['authorization'];
-        req.headers['authorization'] = 'Basic ' + Buffer.from('user:' + cfg.token).toString('base64');
-        
-        if (isReadOnly) {
-          const WebSocket = require('ws');
-          const targetWs = new WebSocket(`ws://${HOST_IP}:${cfg.port}${req.url}`, {
-            headers: { 'Authorization': req.headers['authorization'] }
-          });
-          
-          socket.on('data', (data: Buffer) => {
-            if (data.length > 0 && data[0] === 0x30) return;
-            targetWs.send(data);
-          });
-          
-          targetWs.on('message', (data: any) => socket.write(data));
-          targetWs.on('close', () => socket.destroy());
-          socket.on('close', () => targetWs.close());
-        } else {
-          proxy.ws(req, socket, head, { target: 'ws://' + HOST_IP + ':' + cfg.port });
-        }
-      });
+      return getPaneConfig(name);
+    }).then(cfg => {
+      if (!cfg) { socket.destroy(); return; }
+      if (!cfg) { socket.destroy(); return; }
+      req.url = m[2] || '/';
+      delete req.headers['authorization'];
+      req.headers['authorization'] = 'Basic ' + Buffer.from('user:' + cfg.token).toString('base64');
+      proxy.ws(req, socket, head, { target: 'ws://' + HOST_IP + ':' + cfg.port });
     }).catch(() => socket.destroy());
   } else {
     socket.destroy();
