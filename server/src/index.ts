@@ -166,6 +166,26 @@ proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage,
   delete proxyRes.headers['www-authenticate'];
 });
 
+proxy.on('open', (proxySocket: any) => {
+  const req = (proxySocket as any).upgradeReq;
+  if (!req) return;
+  
+  const wsToken = extractToken(req);
+  verifyToken(wsToken || '').then(authResult => {
+    const isReadOnly = hasPermission(authResult, 'ttyd_read') && !hasPermission(authResult, 'ttyd_write');
+    if (!isReadOnly) return;
+    
+    // 拦截客户端发送的数据
+    const originalWrite = proxySocket.write.bind(proxySocket);
+    proxySocket.write = function(data: any) {
+      if (Buffer.isBuffer(data) && data.length > 0 && data[0] === 0x30) {
+        return true; // 丢弃输入消息
+      }
+      return originalWrite(data);
+    };
+  });
+});
+
 function json<T>(res: http.ServerResponse, data: T): void {
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
