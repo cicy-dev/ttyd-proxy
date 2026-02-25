@@ -264,15 +264,16 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       // Check group_id permission (Step 6)
       if (authResult.group_id !== null && authResult.group_id !== undefined) {
         try {
-          const paneRes = await fetch(`${config.fastApiBaseUrl}/api/tmux/panes/${encodeURIComponent(name)}`, {
+          const groupRes = await fetch(`${config.fastApiBaseUrl}/api/groups/${authResult.group_id}`, {
             headers: { 'Authorization': `Bearer ${INTERNAL_TOKEN}` }
           });
-          if (!paneRes.ok) {
-            res.writeHead(404);
-            return res.end('pane not found');
+          if (!groupRes.ok) {
+            res.writeHead(403);
+            return res.end('forbidden: group not found');
           }
-          const paneData = await paneRes.json() as { group_id?: number | null };
-          if (paneData.group_id !== authResult.group_id) {
+          const groupData = await groupRes.json() as { panes?: { pane_id: string }[] };
+          const paneIds = (groupData.panes || []).map(p => p.pane_id);
+          if (!paneIds.includes(name)) {
             res.writeHead(403);
             return res.end('forbidden: pane not in your group');
           }
