@@ -166,26 +166,6 @@ proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage,
   delete proxyRes.headers['www-authenticate'];
 });
 
-proxy.on('open', (proxySocket: any) => {
-  const req = (proxySocket as any).upgradeReq;
-  if (!req) return;
-  
-  const wsToken = extractToken(req);
-  verifyToken(wsToken || '').then(authResult => {
-    const isReadOnly = hasPermission(authResult, 'ttyd_read') && !hasPermission(authResult, 'ttyd_write');
-    if (!isReadOnly) return;
-    
-    // 拦截客户端发送的数据
-    const originalWrite = proxySocket.write.bind(proxySocket);
-    proxySocket.write = function(data: any) {
-      if (Buffer.isBuffer(data) && data.length > 0 && data[0] === 0x30) {
-        return true; // 丢弃输入消息
-      }
-      return originalWrite(data);
-    };
-  });
-});
-
 function json<T>(res: http.ServerResponse, data: T): void {
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
@@ -382,14 +362,50 @@ server.on('upgrade', (req: http.IncomingMessage, socket: import('stream').Duplex
         return;
       }
 
-      return getPaneConfig(name);
-    }).then(cfg => {
-      if (!cfg) { socket.destroy(); return; }
-      if (!cfg) { socket.destroy(); return; }
-      req.url = m[2] || '/';
-      delete req.headers['authorization'];
-      req.headers['authorization'] = 'Basic ' + Buffer.from('user:' + cfg.token).toString('base64');
-      proxy.ws(req, socket, head, { target: 'ws://' + HOST_IP + ':' + cfg.port });
+      const isReadOnly = hasPermission(authResult, 'ttyd_read') && !hasPermission(authResult, 'ttyd_write');
+      
+      return getPaneConfig(name).then(cfg => {
+        if (!cfg) { socket.destroy(); return; }
+        
+        if (isReadOnly) {
+          // 只读用户：手动转发并过滤输入
+          const net = require('net');
+          const targetSocket = net.connect(cfg.port, HOST_IP, () => {
+            // 发送认证
+            const auth = 'Basic ' + Buffer.from('user:' + cfg.token).toString('base64');
+            req.headers['authorization'] = auth;
+            delete req.headers['host'];
+            
+            // 转发握手请求
+            targetSocket.write(`GET ${m[2] || '/'} HTTP/1.1\r\n`);
+            Object.keys(req.headers).forEach(k => {
+              targetSocket.write(`${k}: ${req.headers[k]}\r\n`);
+            });
+            targetSocket.write('\r\n');
+            if (head.length > 0) targetSocket.write(head);
+          });
+          
+          // 客户端 -> 后端：过滤 0x30
+          socket.on('data', (data: Buffer) => {
+            if (data.length > 0 && data[0] === 0x30) return;
+            targetSocket.write(data);
+          });
+          
+          // 后端 -> 客户端：直接转发
+          targetSocket.on('data', (data: Buffer) => socket.write(data));
+          
+          socket.on('close', () => targetSocket.destroy());
+          targetSocket.on('close', () => socket.destroy());
+          socket.on('error', () => targetSocket.destroy());
+          targetSocket.on('error', () => socket.destroy());
+        } else {
+          // 正常用户：使用 http-proxy
+          req.url = m[2] || '/';
+          delete req.headers['authorization'];
+          req.headers['authorization'] = 'Basic ' + Buffer.from('user:' + cfg.token).toString('base64');
+          proxy.ws(req, socket, head, { target: 'ws://' + HOST_IP + ':' + cfg.port });
+        }
+      });
     }).catch(() => socket.destroy());
   } else {
     socket.destroy();
