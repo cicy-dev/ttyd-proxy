@@ -363,49 +363,29 @@ server.on('upgrade', (req: http.IncomingMessage, socket: import('stream').Duplex
       }
 
       const isReadOnly = hasPermission(authResult, 'ttyd_read') && !hasPermission(authResult, 'ttyd_write');
-      
-      return getPaneConfig(name).then(cfg => {
-        if (!cfg) { socket.destroy(); return; }
-        
-        if (isReadOnly) {
-          // 只读用户：手动转发并过滤输入
-          const net = require('net');
-          const targetSocket = net.connect(cfg.port, HOST_IP, () => {
-            // 发送认证
-            const auth = 'Basic ' + Buffer.from('user:' + cfg.token).toString('base64');
-            req.headers['authorization'] = auth;
-            delete req.headers['host'];
-            
-            // 转发握手请求
-            targetSocket.write(`GET ${m[2] || '/'} HTTP/1.1\r\n`);
-            Object.keys(req.headers).forEach(k => {
-              targetSocket.write(`${k}: ${req.headers[k]}\r\n`);
-            });
-            targetSocket.write('\r\n');
-            if (head.length > 0) targetSocket.write(head);
+      if (isReadOnly) {
+        // 重写 pipe：当 http-proxy 执行 socket.pipe(proxySocket) 时插入过滤
+        const origPipe = socket.pipe.bind(socket);
+        (socket as any).pipe = function(dest: any, opts?: any) {
+          const { Transform } = require('stream');
+          const filter = new Transform({
+            transform(chunk: Buffer, _enc: string, cb: Function) {
+              // ttyd 协议：0x30 = 客户端输入，丢弃
+              if (chunk.length > 0 && chunk[0] === 0x30) return cb();
+              cb(null, chunk);
+            }
           });
-          
-          // 客户端 -> 后端：过滤 0x30
-          socket.on('data', (data: Buffer) => {
-            if (data.length > 0 && data[0] === 0x30) return;
-            targetSocket.write(data);
-          });
-          
-          // 后端 -> 客户端：直接转发
-          targetSocket.on('data', (data: Buffer) => socket.write(data));
-          
-          socket.on('close', () => targetSocket.destroy());
-          targetSocket.on('close', () => socket.destroy());
-          socket.on('error', () => targetSocket.destroy());
-          targetSocket.on('error', () => socket.destroy());
-        } else {
-          // 正常用户：使用 http-proxy
-          req.url = m[2] || '/';
-          delete req.headers['authorization'];
-          req.headers['authorization'] = 'Basic ' + Buffer.from('user:' + cfg.token).toString('base64');
-          proxy.ws(req, socket, head, { target: 'ws://' + HOST_IP + ':' + cfg.port });
-        }
-      });
+          return origPipe(filter).pipe(dest, opts);
+        };
+      }
+
+      return getPaneConfig(name);
+    }).then(cfg => {
+      if (!cfg) { socket.destroy(); return; }
+      req.url = m[2] || '/';
+      delete req.headers['authorization'];
+      req.headers['authorization'] = 'Basic ' + Buffer.from('user:' + cfg.token).toString('base64');
+      proxy.ws(req, socket, head, { target: 'ws://' + HOST_IP + ':' + cfg.port });
     }).catch(() => socket.destroy());
   } else {
     socket.destroy();
