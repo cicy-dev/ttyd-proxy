@@ -13,6 +13,7 @@ services:
       - NODE_ENV=development
       - PORT=6901
       - CHOKIDAR_USEPOLLING=true
+      - INTERNAL_TOKEN=${INTERNAL_TOKEN}
     ports:
       - "6901:6901"
     command: npx tsx watch src/index.ts

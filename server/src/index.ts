@@ -44,17 +44,18 @@ interface GlobalConfig {
 // --- Port cache: loaded at startup, avoids per-request fast-api lookup ---
 interface PaneConfig { port: number; token: string; }
 const paneCache: Record<string, PaneConfig> = {};
+const INTERNAL_TOKEN = process.env.INTERNAL_TOKEN || '';
 
 async function loadPaneCache(): Promise<void> {
   try {
     const res = await fetch(`${config.fastApiBaseUrl}${API_PATHS.TTYD_LIST}`, {
-      headers: { "Accept": "application/json" }
+      headers: { "Authorization": `Bearer ${INTERNAL_TOKEN}`, "Accept": "application/json" }
     });
     if (!res.ok) { console.warn('loadPaneCache: fast-api returned', res.status); return; }
     const data = await res.json() as { configs?: Array<{ pane_id: string; ttyd_port: number }> };
     // Token removed // all panes share the same token
     for (const c of data.configs || []) {
-      paneCache[c.pane_id] = { port: c.ttyd_port, token: "" };
+      paneCache[c.pane_id] = { port: c.ttyd_port, token: INTERNAL_TOKEN };
     }
     console.log(`✓ Pane cache loaded: ${Object.keys(paneCache).length} panes`);
   } catch (e) {
@@ -67,11 +68,11 @@ async function getPaneConfig(name: string): Promise<PaneConfig | null> {
   // Cache miss: fetch from fast-api and update cache
   try {
     const res = await fetch(`${config.fastApiBaseUrl}${API_PATHS.TTYD_BY_NAME(name)}`, {
-      headers: { "Accept": "application/json" }
+      headers: { "Authorization": `Bearer ${INTERNAL_TOKEN}`, "Accept": "application/json" }
     });
     if (!res.ok) return null;
     const data = await res.json() as { port: number; token: string };
-    paneCache[name] = { port: data.port, token: "REMOVED" };
+    paneCache[name] = { port: data.port, token: data.token };
     return paneCache[name];
   } catch { return null; }
 }
@@ -212,7 +213,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
         
         const fastRes = await fetch(`${config.fastApiBaseUrl}${API_PATHS.TMUX_SEND}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer REMOVED` },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${INTERNAL_TOKEN}` },
           body: JSON.stringify({ win_id: paneTarget, keys: key })
         });
         const data = await fastRes.json();
@@ -232,7 +233,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
 
       const url = new URL(req.url || '/', 'http://localhost');
       const queryToken = url.searchParams.get('token');
-      let name = decodeURIComponent(m[1]);
+      let name = decodeURIComponent(m[1].split('?')[0]);
       name = normalizePaneId(name)
       let subPath = m[2] || '/';
       subPath = subPath.split('?')[0];
@@ -322,7 +323,7 @@ window.$RefreshSig$ = () => (type) => type;</script>
 server.on('upgrade', (req: http.IncomingMessage, socket: import('stream').Duplex, head: Buffer) => {
   const m = req.url?.match(/^\/ttyd\/([^/]+)(\/.*)?$/);
   if (m) {
-    let name = decodeURIComponent(m[1]);
+    let name = decodeURIComponent(m[1].split('?')[0]);
       name = normalizePaneId(name);
 
     // Check token (async)
