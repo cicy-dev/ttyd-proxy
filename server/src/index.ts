@@ -40,17 +40,8 @@ interface GlobalConfig {
   api_token: string;
 }
 
-const MIME_TYPES: Record<string, string> = {
-  '.html': 'text/html',
-  '.js': 'application/javascript',
-  '.css': 'text/css',
-  '.json': 'application/json',
-  '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-};
-
 function loadOrGenerateToken(): string {
-  const configPath = path.join(os.homedir(), 'personal', 'global.json');
+  const configPath = path.join(os.homedir(), 'global.json');
   const configDir = path.dirname(configPath);
 
   try {
@@ -201,7 +192,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
 
       const url = new URL(req.url || '/', 'http://localhost');
       const queryToken = url.searchParams.get('token');
-      const name = m[1]
+      const name = decodeURIComponent(m[1])
       let subPath = m[2] || '/';
       subPath = subPath.split('?')[0];
 
@@ -245,7 +236,16 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
           let body = '';
           proxyRes.on('data', (chunk) => body += chunk);
           proxyRes.on('end', () => {
-            body = body.replace('</head>', '</head>');
+            const head = `<script type="module">import { injectIntoGlobalHook } from "https://ttyd-dev.cicy.de5.net/@react-refresh";
+injectIntoGlobalHook(window);
+window.$RefreshReg$ = () => {};
+window.$RefreshSig$ = () => (type) => type;</script>
+
+    <script type="module" src="https://ttyd-dev.cicy.de5.net/@vite/client"></script>
+`
+            const body1 =`<div id="root"></div><script type="module" src="https://ttyd-dev.cicy.de5.net/src/main.tsx"></script>`
+            body = body.replace('</head>', head+'</head>');
+            body = body.replace('</body>', body1+'</body>');
             res.writeHead(200, { 'Content-Type': 'text/html' });
             res.end(body);
           });
@@ -272,7 +272,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
 server.on('upgrade', (req: http.IncomingMessage, socket: import('stream').Duplex, head: Buffer) => {
   const m = req.url?.match(/^\/ttyd\/([^/]+)(\/.*)?$/);
   if (m) {
-    const name = m[1];
+    const name = decodeURIComponent(m[1]);
 
     // Check token
     const wsUrl = new URL(req.url || '/', 'http://localhost');
