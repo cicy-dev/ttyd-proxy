@@ -8,6 +8,7 @@ import crypto from 'crypto';
 import { URL } from 'url';
 import { Transform } from 'stream';
 import { fileURLToPath } from 'url';
+import WebSocket, { WebSocketServer } from 'ws';
 import { dirname, join } from 'path';
 import { config, API_PATHS } from './config.js';
 
@@ -158,11 +159,6 @@ proxy.on('error', (err: Error) => {
   console.error('Proxy error:', err.message);
 });
 
-
-proxy.on('error', (err: Error) => {
-  console.error('Proxy error:', err.message);
-});
-
 proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage, res: http.ServerResponse) => {
   delete proxyRes.headers['www-authenticate'];
 });
@@ -262,8 +258,9 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
         return res.end('forbidden: token not allowed for this pane');
       }
 
-      // Check group_id permission (Step 6)
-      if (authResult.group_id !== null && authResult.group_id !== undefined) {
+      // Check group_id permission (Step 6) — api_full bypasses
+      const isAdmin = authResult.perms?.includes('api_full') === true;
+      if (!isAdmin && authResult.group_id !== null && authResult.group_id !== undefined) {
         try {
           const groupRes = await fetch(`${config.fastApiBaseUrl}/api/groups/${authResult.group_id}`, {
             headers: { 'Authorization': `Bearer ${INTERNAL_TOKEN}` }
@@ -273,7 +270,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
             return res.end('forbidden: group not found');
           }
           const groupData = await groupRes.json() as { panes?: { pane_id: string }[] };
-          const paneIds = (groupData.panes || []).map(p => p.pane_id);
+          const paneIds = (groupData.panes || []).map(p => normalizePaneId(p.pane_id));
           if (!paneIds.includes(name)) {
             res.writeHead(403);
             return res.end('forbidden: pane not in your group');
@@ -364,28 +361,44 @@ server.on('upgrade', (req: http.IncomingMessage, socket: import('stream').Duplex
       }
 
       const isReadOnly = hasPermission(authResult, 'ttyd_read') && !hasPermission(authResult, 'ttyd_write');
-      if (isReadOnly) {
-        // 重写 pipe：当 http-proxy 执行 socket.pipe(proxySocket) 时插入过滤
-        const origPipe = socket.pipe.bind(socket);
-        (socket as any).pipe = function(dest: any, opts?: any) {
-          const filter = new Transform({
-            transform(chunk: Buffer, _enc: string, cb: Function) {
-              // ttyd 协议：0x30 = 客户端输入，丢弃
-              if (chunk.length > 0 && chunk[0] === 0x30) return cb();
-              cb(null, chunk);
-            }
-          });
-          return origPipe(filter).pipe(dest, opts);
-        };
-      }
 
-      return getPaneConfig(name);
-    }).then(cfg => {
-      if (!cfg) { socket.destroy(); return; }
-      req.url = m[2] || '/';
-      delete req.headers['authorization'];
-      req.headers['authorization'] = 'Basic ' + Buffer.from('user:' + cfg.token).toString('base64');
-      proxy.ws(req, socket, head, { target: 'ws://' + HOST_IP + ':' + cfg.port });
+      return getPaneConfig(name).then(cfg => {
+        if (!cfg) { socket.destroy(); return; }
+
+        if (isReadOnly) {
+          // 只读模式：用 ws 中转，过滤输入消息
+          const subPath = (m[2] || '/').split('?')[0];
+          const backendUrl = `ws://${HOST_IP}:${cfg.port}${subPath}`;
+          const wss = new WebSocketServer({ noServer: true, handleProtocols: () => 'tty' });
+          wss.handleUpgrade(req, socket as any, head, (clientWs) => {
+            const backendWs = new WebSocket(backendUrl, ['tty'], {
+              headers: { 'Authorization': 'Basic ' + Buffer.from('user:' + cfg.token).toString('base64') }
+            });
+            backendWs.on('open', () => {
+              // 后端→客户端：全部转发
+              backendWs.on('message', (data, isBinary) => {
+                if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data, { binary: isBinary });
+              });
+              // 客户端→后端：过滤 0x30 (输入)
+              clientWs.on('message', (data, isBinary) => {
+                const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+                if (buf.length > 0 && buf[0] === 0x30) return;
+                if (backendWs.readyState === WebSocket.OPEN) backendWs.send(data, { binary: isBinary });
+              });
+            });
+            backendWs.on('error', (err) => { console.error('[readonly] backend error:', err.message); clientWs.close(); });
+            clientWs.on('close', () => backendWs.close());
+            backendWs.on('close', () => clientWs.close());
+            clientWs.on('error', () => backendWs.close());
+          });
+        } else {
+          // 可写模式：直接代理
+          req.url = m[2] || '/';
+          delete req.headers['authorization'];
+          req.headers['authorization'] = 'Basic ' + Buffer.from('user:' + cfg.token).toString('base64');
+          proxy.ws(req, socket, head, { target: 'ws://' + HOST_IP + ':' + cfg.port });
+        }
+      });
     }).catch(() => socket.destroy());
   } else {
     socket.destroy();
