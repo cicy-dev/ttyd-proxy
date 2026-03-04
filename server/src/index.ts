@@ -224,12 +224,40 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
     return;
   }
 
+  if (urlPath === '/api/capture-bottom' && req.method === 'POST') {
+    const token = extractToken(req);
+    const authResult = await verifyToken(token || '');
+    if (!authResult.valid) { res.writeHead(401); return res.end('unauthorized'); }
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        const { win_id } = JSON.parse(body);
+        if (!win_id) { res.writeHead(400); return res.end('win_id required'); }
+        
+        const fastRes = await fetch(`${config.fastApiBaseUrl}${API_PATHS.TMUX_CAPTURE}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${INTERNAL_TOKEN}` },
+          body: JSON.stringify({ win_id, target: 'bottom' })
+        });
+        const data = await fastRes.json();
+        return json(res, data);
+      } catch (e) {
+        console.error('/api/capture-bottom error:', (e as Error).message);
+        res.writeHead(500);
+        return res.end('error');
+      }
+    });
+    return;
+  }
+
   if (urlPath.startsWith('/ttyd/')) {
     const m = req.url?.match(/^\/ttyd\/([^/]+)(\/.*)?$/);
     if (m) {
 
       const url = new URL(req.url || '/', 'http://localhost');
       const queryToken = url.searchParams.get('token');
+      const mode = url.searchParams.get('mode');
       let name = decodeURIComponent(m[1].split('?')[0]);
       name = normalizePaneId(name)
       let subPath = m[2] || '/';
@@ -319,8 +347,13 @@ window.$RefreshSig$ = () => (type) => type;</script>
     <script type="module" src="https://ttyd-dev.cicy.de5.net/@vite/client"></script>
 ${readonlyScript}`
             const body1 =`<div id="root"></div><script type="module" src="https://ttyd-dev.cicy.de5.net/src/main.tsx"></script>`
-            body = body.replace('</head>', head+'</head>');
-            body = body.replace('</body>', body1+'</body>');
+           
+            if(!mode){
+              body = body.replace('</head>', head+'</head>');
+              body = body.replace('</body>', body1+'1111111</body>');
+            }
+
+
             res.writeHead(200, { 'Content-Type': 'text/html' });
             res.end(body);
           });
