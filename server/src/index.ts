@@ -351,12 +351,7 @@ ${readonlyScript}`
             if(!mode){
               body = body.replace('</head>', head+'</head>');
               body = body.replace('</body>', body1+'</body>');
-            }else{
-              body = body.replace('</head>', head+'</head>');
-
             }
-
-
             res.writeHead(200, { 'Content-Type': 'text/html' });
             res.end(body);
           });
