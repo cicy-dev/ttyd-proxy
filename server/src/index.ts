@@ -338,16 +338,16 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
             // Inject readonly mode for ttyd_read permission (Step 6)
             const isReadOnly = hasPermission(authResult, 'ttyd_read') && !hasPermission(authResult, 'ttyd_write');
             const readonlyScript = isReadOnly ? `<script>window.TTYD_READONLY = true;</script>` : '';
-            const css = `<style>
-      body { background: #1f2937; }
-      *::-webkit-scrollbar { width: 6px; height: 6px; }
-      *::-webkit-scrollbar-track { background: #1f2937; }
-      *::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
-      *::-webkit-scrollbar-thumb:hover { background: #6b7280; }
-      .xterm .xterm-viewport::-webkit-scrollbar { width: 0 !important; height: 0 !important; display: none !important; }
-      .xterm .xterm-viewport { scrollbar-width: none !important; -ms-overflow-style: none !important; }
-    </style>`
-            const head = `<script type="module">import { injectIntoGlobalHook } from "https://ttyd-dev.cicy.de5.net/@react-refresh";
+    //         const css = `<style>
+    //   body { background: #1f2937; }
+    //   *::-webkit-scrollbar { width: 6px; height: 6px; }
+    //   *::-webkit-scrollbar-track { background: #1f2937; }
+    //   *::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+    //   *::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+    //   .xterm .xterm-viewport::-webkit-scrollbar { width: 0 !important; height: 0 !important; display: none !important; }
+    //   .xterm .xterm-viewport { scrollbar-width: none !important; -ms-overflow-style: none !important; }
+    // </style>`
+            const head = `${css}<script type="module">import { injectIntoGlobalHook } from "https://ttyd-dev.cicy.de5.net/@react-refresh";
 injectIntoGlobalHook(window);
 window.$RefreshReg$ = () => {};
 window.$RefreshSig$ = () => (type) => type;</script>
