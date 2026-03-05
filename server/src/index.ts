@@ -337,7 +337,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
           proxyRes.on('end', () => {
             // Inject readonly mode for ttyd_read permission (Step 6)
             const isReadOnly = hasPermission(authResult, 'ttyd_read') && !hasPermission(authResult, 'ttyd_write');
-            const readonlyScript = isReadOnly ? `<script>window.TTYD_READONLY = true;</script>` : '';
+            const readonlyScript = isReadOnly ? `,<style><><script>window.TTYD_READONLY = true;</script>` : '';
             
             const head = `<script type="module">import { injectIntoGlobalHook } from "https://ttyd-dev.cicy.de5.net/@react-refresh";
 injectIntoGlobalHook(window);
@@ -351,6 +351,9 @@ ${readonlyScript}`
             if(!mode){
               body = body.replace('</head>', head+'</head>');
               body = body.replace('</body>', body1+'</body>');
+            }else{
+              body = body.replace('</head>', head+'</head>');
+
             }
 
 
