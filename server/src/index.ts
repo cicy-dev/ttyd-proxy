@@ -350,7 +350,7 @@ ${readonlyScript}`
            
             if(!mode){
               body = body.replace('</head>', head+'</head>');
-              body = body.replace('</body>', body1+'1111111</body>');
+              body = body.replace('</body>', body1+'</body>');
             }
 
 
