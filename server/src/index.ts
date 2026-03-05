@@ -347,7 +347,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       .xterm .xterm-viewport::-webkit-scrollbar { width: 0 !important; height: 0 !important; display: none !important; }
       .xterm .xterm-viewport { scrollbar-width: none !important; -ms-overflow-style: none !important; }
     </style>`
-            const head = `<script type="module">import { injectIntoGlobalHook } from "https://ttyd-dev.cicy.de5.net/@react-refresh";
+            const head = `${css}<script type="module">import { injectIntoGlobalHook } from "https://ttyd-dev.cicy.de5.net/@react-refresh";
 injectIntoGlobalHook(window);
 window.$RefreshReg$ = () => {};
 window.$RefreshSig$ = () => (type) => type;</script>
@@ -359,6 +359,8 @@ ${readonlyScript}`
             if(!mode){
               body = body.replace('</head>', head+'</head>');
               body = body.replace('</body>', body1+'</body>');
+            }else{              
+              body = body.replace('</head>', css+'</head>');
             }
             res.writeHead(200, { 'Content-Type': 'text/html' });
             res.end(body);
