@@ -7,7 +7,7 @@ services:
       - ./server/src:/app/src:ro
       - ./server/package.json:/app/package.json:ro
       - ~/global.json:/root/global.json:ro
-      - /app/node_modules
+      - /app
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - NODE_ENV=development
