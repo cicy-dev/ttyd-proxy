@@ -57,7 +57,7 @@ function get_token(): string {
 // --- Port cache: loaded at startup, avoids per-request fast-api lookup ---
 interface PaneConfig { port: number; token: string; }
 const paneCache: Record<string, PaneConfig> = {};
-const INTERNAL_TOKEN = process.env.INTERNAL_TOKEN || get_token();
+const INTERNAL_TOKEN = get_token();
 
 async function loadPaneCache(): Promise<void> {
   try {
