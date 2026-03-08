@@ -6,7 +6,7 @@ HTTP/WebSocket proxy server for ttyd terminals.
 
 ### Pull from Docker Hub
 ```bash
-docker pull cicydev/ttyd-proxy:server
+docker pull cicybot/ttyd-proxy:server
 ```
 
 ### Development (Hot Reload Enabled)
