@@ -1,18 +1,22 @@
-# ttyd-proxy-v1
+# ttyd-proxy
 
-TypeScript fullstack project with Docker development environment and hot reload support.
+Web-based terminal management interface with multi-pane support.
 
 ## Quick Start
 
+### Pull from Docker Hub
+```bash
+docker pull cicydev/ttyd-proxy:server
+```
+
 ### Development (Hot Reload Enabled)
 ```bash
-docker compose -f docker-compose.yml up --build
+docker compose up --build
 ```
 
 **Access:**
-- Frontend: http://localhost:16901
+- Frontend: http://localhost:6902
 - Server API: http://localhost:6901
-- API proxy: Vite forwards `/api/*` and `/ttyd/*` to server
 
 ### Production
 ```bash
@@ -81,7 +85,7 @@ docker compose -f docker-compose.yml logs -f
 
 # 5. Test changes
 curl http://localhost:6901/api/health
-# Or open http://localhost:16901 in browser
+# Or open http://localhost:6902 in browser
 
 # 6. Version bump example
 vim server/package.json  # Change "version": "1.0.4"
@@ -111,7 +115,7 @@ docker compose -f docker-compose.yml up -d --build
 | Server | `tsx watch` live reload | Pre-compiled JS |
 | Frontend | Vite dev server + HMR | Nginx static files |
 | Mount | Bind mount source code | Immutable images |
-| Ports | 16901 (frontend), 6901 (server) | 80 (frontend), 6901 (server) |
+| Ports | 6902 (frontend), 6901 (server) | 80 (frontend), 6901 (server) |
 
 ## Project Structure
 
@@ -185,7 +189,7 @@ docker compose -f docker-compose.yml config
 ```bash
 # Find process using port
 lsof -i :6901
-lsof -i :16901
+lsof -i :6902
 
 # Remove orphan containers
 docker compose -f docker-compose.yml down --remove-orphans
