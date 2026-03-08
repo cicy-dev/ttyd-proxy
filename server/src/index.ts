@@ -42,11 +42,22 @@ interface GlobalConfig {
   api_token: string;
 }
 
+function get_token(): string {
+  try {
+    const globalJsonPath = path.join(os.homedir(), 'global.json');
+    const data = JSON.parse(fs.readFileSync(globalJsonPath, 'utf-8')) as GlobalConfig;
+    return data.api_token || '';
+  } catch (e) {
+    console.error('[get_token] Failed to load token from ~/global.json:', (e as Error).message);
+    return '';
+  }
+}
+
 
 // --- Port cache: loaded at startup, avoids per-request fast-api lookup ---
 interface PaneConfig { port: number; token: string; }
 const paneCache: Record<string, PaneConfig> = {};
-const INTERNAL_TOKEN = process.env.INTERNAL_TOKEN || '';
+const INTERNAL_TOKEN = process.env.INTERNAL_TOKEN || get_token();
 
 async function loadPaneCache(): Promise<void> {
   try {
